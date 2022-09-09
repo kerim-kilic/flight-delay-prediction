@@ -1,0 +1,36 @@
+---
+title: "Study of delay prediction in the US airport network"
+author: "Kerim Kiliç"
+subtitle: Supervised Machined Learning using flight data
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    toc_float: true
+---
+
+# Libraries
+
+The following three libraries are used in this R markdown file.
+
+```{r setup, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(data.table)
+library(tidymodels)
+library(sparklyr)
+```
+
+# Initialize spark and read in data
+
+```{r}
+# spark_install(version = "3.0.0")
+# spark_disconnect(sc)
+sc <- spark_connect(master = "local")
+
+my_data <- readRDS("flights_2017.RDS")
+fwrite(my_data,file = "flights_2017.csv")
+raw_data <- spark_read_csv(sc,"flights_2017.csv")
+raw_data %>% glimpse()
+```
