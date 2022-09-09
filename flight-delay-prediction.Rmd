@@ -34,3 +34,20 @@ fwrite(my_data,file = "flights_2017.csv")
 raw_data <- spark_read_csv(sc,"flights_2017.csv")
 raw_data %>% glimpse()
 ```
+
+# Clean and classify data
+
+```{r}
+spark_data <- raw_data %>%
+  select(-id,-year,-wheels_on_time,-wheels_off_time,-planned_departure_time,-planned_arrival_time,
+         -actual_departure_time,-actual_arrival_time) %>%
+  mutate(delay = case_when(carrier_delay + weather_delay + nas_delay + security_delay + late_aircraft_delay > 0 ~ 1,
+                           carrier_delay + weather_delay + nas_delay + security_delay + late_aircraft_delay == 0 ~ 0))
+
+spark_data$carrier <- as.factor(spark_data$carrier)
+spark_data$tail_number <- as.factor(spark_data$tail_number)
+spark_data$flight_number <- as.factor(as.character(spark_data$flight_number))
+spark_data$origin <- as.factor(spark_data$origin)
+spark_data$destination <- as.factor(spark_data$destination)
+```
+
