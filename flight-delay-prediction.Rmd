@@ -78,3 +78,27 @@ test_data <- spark_data_one_hot_encoded %>%
 
 train_data %>% glimpse()
 ```
+
+# Train a logistic regression model
+
+Train a logistic regression model using the train dataset and get model performance on training data.
+
+```{r}
+### Train a logistic regression model ###
+model <- ml_logistic_regression(train_data, "delay ~ .")
+### Performance on train set
+augment_value <- augment(model) %>% collect()
+augment_value$delay <- as.factor(augment_value$delay)
+augment_value$.predicted_label <- as.factor(augment_value$.predicted_label)
+augment_value %>%
+  accuracy(estimate = .predicted_label, truth = delay)
+```
+
+Make a prediction based on test data and get model performance.
+
+```{r}
+### Performance on test set
+ml_predict(model,test_data) %>%
+  ml_metrics_multiclass()
+```
+
