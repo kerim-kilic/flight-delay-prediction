@@ -79,13 +79,44 @@ test_data <- spark_data_one_hot_encoded %>%
 train_data %>% glimpse()
 ```
 
+# Building a logistic regression pipeline 
+
+Below we build a ML pipeline for a logistic regression model to use cross validation as we perform hyper parameter tuning on our model.
+
+```{r}
+# Pipeline
+glm_pipeline <- ml_pipeline(sc) %>%
+  ft_r_formula(delay ~ .) %>%
+  ml_logistic_regression()
+
+# Grid
+grid <- list(logistic_regression = list(elastic_net_param = c(0,0.25,0.5,0.75,1), reg_param = c(0,0.25,0.5,0.75,1)))
+
+# Cross validation
+cv <- ml_cross_validator(
+  sc,
+  estimator = glm_pipeline, # use our pipeline to estimate the model
+  estimator_param_maps = grid, # use the params in grid
+  evaluator = ml_multiclass_classification_evaluator(sc,metric_name = "accuracy"), # how to evaluate the CV
+  num_folds = 4, # number of CV folds
+  seed = 2018
+)
+
+cv_model <- ml_fit(cv, train_data)
+
+a <- cv_model$avg_metrics_df
+```
+
+
 # Train a logistic regression model
 
-Train a logistic regression model using the train dataset and get model performance on training data.
+Train a logistic regression model using the full training data set and the parameters that rolled out of the cross validation with hyper model parameter tuning.
 
 ```{r}
 ### Train a logistic regression model ###
-glm_model <- ml_logistic_regression(train_data, "delay ~ .")
+glm_model <- ml_logistic_regression(train_data, "delay ~ .",
+                                    elastic_net_param = a[which.max(a$accuracy),"elastic_net_param_1"],
+                                    reg_param = a[which.max(a$accuracy),"reg_param_1"])
 ### Performance on train set
 augment_value <- augment(glm_model) %>% collect()
 augment_value$delay <- as.factor(augment_value$delay)
