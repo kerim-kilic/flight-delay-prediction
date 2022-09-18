@@ -85,9 +85,9 @@ Train a logistic regression model using the train dataset and get model performa
 
 ```{r}
 ### Train a logistic regression model ###
-model <- ml_logistic_regression(train_data, "delay ~ .")
+glm_model <- ml_logistic_regression(train_data, "delay ~ .")
 ### Performance on train set
-augment_value <- augment(model) %>% collect()
+augment_value <- augment(glm_model) %>% collect()
 augment_value$delay <- as.factor(augment_value$delay)
 augment_value$.predicted_label <- as.factor(augment_value$.predicted_label)
 augment_value %>%
@@ -98,7 +98,29 @@ Make a prediction based on test data and get model performance.
 
 ```{r}
 ### Performance on test set
-ml_predict(model,test_data) %>%
+ml_predict(glm_model,test_data) %>%
   ml_metrics_multiclass()
 ```
 
+# Train a decision tree model
+
+Train a decision tree model using the train dataset and get model performance on training data.
+
+```{r}
+### Train a decision tree model ###
+tree_model <- ml_decision_tree_classifier(train_data, "delay ~ .", max_bins = 317)
+### Performance on train set
+augment_value <- augment(tree_model) %>% collect()
+augment_value$delay <- as.factor(augment_value$delay)
+augment_value$.predicted_label <- as.factor(augment_value$.predicted_label)
+augment_value %>%
+  accuracy(estimate = .predicted_label, truth = delay)
+```
+
+Make a prediction based on test data and get model performance.
+
+```{r}
+### Performance on test set
+ml_predict(tree_model,test_data) %>%
+  ml_metrics_multiclass()
+```
