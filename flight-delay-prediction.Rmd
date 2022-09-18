@@ -1,7 +1,7 @@
 ---
 title: "Study of delay prediction in the US airport network"
 author: "Kerim Kiliç"
-subtitle: Supervised Machined Learning using flight data
+subtitle: "Supervised Machined Learning using flight data"
 output:
   html_document:
     df_print: paged
@@ -25,12 +25,15 @@ library(sparklyr)
 # Initialize spark and read in data
 
 ```{r}
-# spark_install(version = "3.0.0")
+### Uncomment these two lines to install spark, 
+### and optionally to disconnect an existing connection
+# spark_install(version = "3.3.0")
 # spark_disconnect(sc)
 sc <- spark_connect(master = "local")
 
-my_data <- readRDS("flights_2017.RDS")
-fwrite(my_data,file = "flights_2017.csv")
+### Uncomment these two lines to read in the RDS file of the data of 2017
+# my_data <- readRDS("flights_2017.RDS")
+# fwrite(my_data,file = "flights_2017.csv")
 raw_data <- spark_read_csv(sc,"flights_2017.csv")
 raw_data %>% glimpse()
 ```
@@ -38,16 +41,40 @@ raw_data %>% glimpse()
 # Clean and classify data
 
 ```{r}
+### Remove redundant variables and classify the data based on the numerical delays
 spark_data <- raw_data %>%
   select(-id,-year,-wheels_on_time,-wheels_off_time,-planned_departure_time,-planned_arrival_time,
-         -actual_departure_time,-actual_arrival_time) %>%
-  mutate(delay = case_when(carrier_delay + weather_delay + nas_delay + security_delay + late_aircraft_delay > 0 ~ 1,
-                           carrier_delay + weather_delay + nas_delay + security_delay + late_aircraft_delay == 0 ~ 0))
+         -actual_departure_time,-actual_arrival_time,-tail_number,-flight_number,-carrier) %>%
+  mutate(delay = case_when(carrier_delay + weather_delay + nas_delay + security_delay + late_aircraft_delay > 0 ~ "1",
+                           carrier_delay + weather_delay + nas_delay + security_delay + late_aircraft_delay == 0 ~ "0"))
 
-spark_data$carrier <- as.factor(spark_data$carrier)
-spark_data$tail_number <- as.factor(spark_data$tail_number)
-spark_data$flight_number <- as.factor(as.character(spark_data$flight_number))
-spark_data$origin <- as.factor(spark_data$origin)
-spark_data$destination <- as.factor(spark_data$destination)
+### Remove the numerical delays since we only look at classification for now
+spark_data <- spark_data %>%
+  select(-carrier_delay,-weather_delay,-nas_delay,-security_delay,-late_aircraft_delay)
+### Remove rows that contain any number of NA values
+spark_data <- na.omit(spark_data)
+spark_data %>% glimpse()
+
+### Index the categorical features and apply one hot encoding
+spark_data <- ft_string_indexer(spark_data, input_col = "origin", output_col = "origin_ind")
+spark_data <- ft_string_indexer(spark_data, input_col = "destination", output_col = "destination_ind")
+spark_data_one_hot_encoded <- ft_one_hot_encoder(spark_data, input_cols = c("origin_ind","destination_ind"), output_cols = c("origin_out","destination_out")) %>%
+  select(-origin,-destination)
+spark_data_one_hot_encoded %>% glimpse()
 ```
 
+# Splitting data in train and test sets
+
+Take a sample set of the data to reduce time to train the model since we are just playing around with the package.
+
+```{r}
+train_data <- spark_data_one_hot_encoded %>%
+  group_by(delay) %>%
+  sample_frac(0.0008)
+
+test_data <- spark_data_one_hot_encoded %>%
+  group_by(delay) %>%
+  sample_frac(0.0002)
+
+train_data %>% glimpse()
+```
