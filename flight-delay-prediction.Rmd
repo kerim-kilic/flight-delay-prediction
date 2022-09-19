@@ -79,7 +79,11 @@ test_data <- spark_data_one_hot_encoded %>%
 train_data %>% glimpse()
 ```
 
-# Building a logistic regression pipeline 
+# Logistic regression model
+
+In this section we will build a logistic regression pipeline and cross-validate and hyper-parameter tune a logistic regression model.
+
+## Building a logistic regression pipeline 
 
 Below we build a ML pipeline for a logistic regression model to use cross validation as we perform hyper parameter tuning on our model.
 
@@ -108,7 +112,7 @@ a <- cv_model$avg_metrics_df
 ```
 
 
-# Train a logistic regression model
+## Train a tuned logistic regression model
 
 Train a logistic regression model using the full training data set and the parameters that rolled out of the cross validation with hyper model parameter tuning.
 
@@ -133,13 +137,47 @@ ml_predict(glm_model,test_data) %>%
   ml_metrics_multiclass()
 ```
 
-# Train a decision tree model
+# Decision tree model
+
+In this section we will build a logistic regression pipeline and cross-validate and hyper-parameter tune a decision tree model.
+
+## Building a decision tree pipeline
+
+```{r}
+# Pipeline
+tree_pipeline <- ml_pipeline(sc) %>%
+  ft_r_formula(delay ~ .) %>%
+  ml_decision_tree_classifier()
+
+# Grid
+grid <- list(decision_tree = list(max_depth = c(1,3,5,7,10), max_bins = 317))
+
+# Cross validation
+cv <- ml_cross_validator(
+  sc,
+  estimator = tree_pipeline, # use our pipeline to estimate the model
+  estimator_param_maps = grid, # use the params in grid
+  evaluator = ml_multiclass_classification_evaluator(sc,metric_name = "accuracy"), # how to evaluate the CV
+  num_folds = 4, # number of CV folds
+  seed = 2018
+)
+
+cv_model <- ml_fit(cv, train_data)
+
+a <- cv_model$avg_metrics_df
+```
+
+
+## Train a decision tree model
 
 Train a decision tree model using the train dataset and get model performance on training data.
 
 ```{r}
 ### Train a decision tree model ###
-tree_model <- ml_decision_tree_classifier(train_data, "delay ~ .", max_bins = 317)
+tree_model <- ml_decision_tree_classifier(train_data, 
+                                          "delay ~ .", 
+                                          max_bins = a[which.max(a$accuracy),"max_bins_1"],
+                                          max_depth = a[which.max(a$accuracy),"max_depth_1"])
 ### Performance on train set
 augment_value <- augment(tree_model) %>% collect()
 augment_value$delay <- as.factor(augment_value$delay)
