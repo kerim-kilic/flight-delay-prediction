@@ -32,9 +32,9 @@ library(sparklyr)
 sc <- spark_connect(master = "local")
 
 ### Uncomment these two lines to read in the RDS file of the data of 2017
-# my_data <- readRDS("flights_2017.RDS")
-# fwrite(my_data,file = "flights_2017.csv")
-raw_data <- spark_read_csv(sc,"flights_2017.csv")
+# my_data <- readRDS("data/flights_2017.RDS")
+# fwrite(my_data,file = "data/flights_2017.csv")
+raw_data <- spark_read_csv(sc,"data/flights_2017.csv")
 raw_data %>% glimpse()
 ```
 
@@ -127,6 +127,8 @@ augment_value$delay <- as.factor(augment_value$delay)
 augment_value$.predicted_label <- as.factor(augment_value$.predicted_label)
 augment_value %>%
   accuracy(estimate = .predicted_label, truth = delay)
+
+ml_save(glm_model, "models/glm_model", overwrite = TRUE)
 ```
 
 Make a prediction based on test data and get model performance.
@@ -184,6 +186,8 @@ augment_value$delay <- as.factor(augment_value$delay)
 augment_value$.predicted_label <- as.factor(augment_value$.predicted_label)
 augment_value %>%
   accuracy(estimate = .predicted_label, truth = delay)
+
+ml_save(tree_model, "models/tree_model_classification", overwrite = TRUE)
 ```
 
 Make a prediction based on test data and get model performance.
@@ -241,6 +245,8 @@ augment_value$delay <- as.factor(augment_value$delay)
 augment_value$.predicted_label <- as.factor(augment_value$.predicted_label)
 augment_value %>%
   accuracy(estimate = .predicted_label, truth = delay)
+
+ml_save(rf_model, "models/rf_model_classification", overwrite = TRUE)
 ```
 
 Make a prediction based on test data and get model performance.
