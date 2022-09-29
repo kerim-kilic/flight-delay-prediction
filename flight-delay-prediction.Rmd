@@ -42,32 +42,33 @@ raw_data <- spark_read_csv(sc,"data/flights_2017.csv")
 raw_data %>% glimpse()
 ```
 
-# Clean and classify data
+# Create datacleaning pipeline
 
 ```{r}
-### Remove redundant variables and classify the data based on the numerical delays
-spark_data <- raw_data %>%
-  select(-id,-year,-wheels_on_time,-wheels_off_time,-planned_departure_time,-planned_arrival_time,
-         -actual_departure_time,-actual_arrival_time,-tail_number,-flight_number,-carrier) %>%
+# Create the main pipeline
+# Remove unnecessary variables
+# Remove any row with any NA value
+# Classify flights with a delay with "1",  and no delay with "0"
+main_pipeline <- .%>%
+  select(-id,-year,-wheels_on_time,-wheels_off_time,-planned_departure_time,
+         -planned_arrival_time,-actual_departure_time,-actual_arrival_time,
+         -tail_number,-flight_number,-carrier,-origin,-destination,
+         -cancelled_flag,-diverted_flag,-num_flights) %>%
+  na.omit() %>%
   mutate(delay = case_when(carrier_delay + weather_delay + nas_delay + security_delay + late_aircraft_delay > 0 ~ "1",
                            carrier_delay + weather_delay + nas_delay + security_delay + late_aircraft_delay == 0 ~ "0"))
 
-### Remove rows that contain any number of NA values
-spark_data <- na.omit(spark_data)
-### Add sum of different types of delays for numerical prediction
-spark_data <- spark_data %>%
-  mutate(delay_time = carrier_delay + weather_delay + nas_delay + security_delay + late_aircraft_delay)
-### Remove the numerical delays since we only look at classification for now
-spark_data <- spark_data %>%
-  select(-carrier_delay,-weather_delay,-nas_delay,-security_delay,-late_aircraft_delay,-origin,-destination,-cancelled_flag,-diverted_flag,-num_flights)
+# Create the numerical delay sub-pipeline
+# Sum the individual types of delay to a total delay_time.
+# Remove individual delays
+numer_delay_pipeline <- .%>% main_pipeline %>% 
+  mutate(delay_time = carrier_delay + weather_delay + nas_delay + security_delay + late_aircraft_delay) %>%
+  select(-carrier_delay,-weather_delay,-nas_delay,-security_delay,-late_aircraft_delay,-delay)
 
-### Index the categorical features and apply one hot encoding
-# spark_data <- ft_string_indexer(spark_data, input_col = "origin", output_col = "origin_ind")
-# spark_data <- ft_string_indexer(spark_data, input_col = "destination", output_col = "destination_ind")
-# spark_data_one_hot_encoded <- ft_one_hot_encoder(spark_data, input_cols = c("origin_ind","destination_ind"), output_cols = c("origin_out","destination_out")) %>%
-#   select(-origin,-destination)
-# spark_data_one_hot_encoded %>% glimpse()
-spark_data_one_hot_encoded <- spark_data
+# Create the classification sub-pipeline
+# Remove the individual delays 
+class_delay_pipeline <- .%>% main_pipeline %>% 
+  select(-carrier_delay,-weather_delay,-nas_delay,-security_delay,-late_aircraft_delay)
 ```
 
 # Splitting data in train and test sets
@@ -76,23 +77,18 @@ Take a sample set of the data to reduce time to train the model.
 
 ```{r}
 ## Splitted datasets for classification
-train_data <- spark_data_one_hot_encoded %>%
+train_data <- class_delay_pipeline(raw_data) %>%
   group_by(delay) %>%
-  sample_frac(0.008) %>%
-  select(-delay_time)
-
-test_data <- spark_data_one_hot_encoded %>%
+  sample_frac(0.008)
+test_data <- class_delay_pipeline(raw_data) %>%
   group_by(delay) %>%
-  sample_frac(0.002) %>%
-  select(-delay_time)
+  sample_frac(0.002)
 
-## Splitted datasets for regression
-train_data_regr <- spark_data_one_hot_encoded %>%
-  sample_frac(0.008) %>%
-  select(-delay)
-test_data_regr <- spark_data_one_hot_encoded %>%
-  sample_frac(0.002) %>%
-  select(-delay)
+## Splitted datasets for numerical prediction
+train_data_regr <- numer_delay_pipeline(raw_data) %>%
+  sample_frac(0.008)
+test_data_regr <- numer_delay_pipeline(raw_data) %>%
+  sample_frac(0.002)
 ```
 
 # Classification of flight delays
