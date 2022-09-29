@@ -59,7 +59,7 @@ spark_data <- spark_data %>%
   mutate(delay_time = carrier_delay + weather_delay + nas_delay + security_delay + late_aircraft_delay)
 ### Remove the numerical delays since we only look at classification for now
 spark_data <- spark_data %>%
-  select(-carrier_delay,-weather_delay,-nas_delay,-security_delay,-late_aircraft_delay,-origin,-destination)
+  select(-carrier_delay,-weather_delay,-nas_delay,-security_delay,-late_aircraft_delay,-origin,-destination,-cancelled_flag,-diverted_flag,-num_flights)
 
 ### Index the categorical features and apply one hot encoding
 # spark_data <- ft_string_indexer(spark_data, input_col = "origin", output_col = "origin_ind")
@@ -72,9 +72,10 @@ spark_data_one_hot_encoded <- spark_data
 
 # Splitting data in train and test sets
 
-Take a sample set of the data to reduce time to train the model since we are just playing around with the package.
+Take a sample set of the data to reduce time to train the model.
 
 ```{r}
+## Splitted datasets for classification
 train_data <- spark_data_one_hot_encoded %>%
   group_by(delay) %>%
   sample_frac(0.008) %>%
@@ -85,7 +86,13 @@ test_data <- spark_data_one_hot_encoded %>%
   sample_frac(0.002) %>%
   select(-delay_time)
 
-train_data %>% glimpse()
+## Splitted datasets for regression
+train_data_regr <- spark_data_one_hot_encoded %>%
+  sample_frac(0.008) %>%
+  select(-delay)
+test_data_regr <- spark_data_one_hot_encoded %>%
+  sample_frac(0.002) %>%
+  select(-delay)
 ```
 
 # Classification of flight delays
@@ -165,7 +172,6 @@ tree_pipeline <- ml_pipeline(sc) %>%
   ml_decision_tree_classifier()
 
 # Grid
-# grid <- list(decision_tree = list(max_depth = c(1,3,5,7,10), max_bins = 317))
 grid <- list(decision_tree = list(max_depth = c(1,3,5,7,10)))
 
 # Cross validation
@@ -225,7 +231,6 @@ rf_pipeline <- ml_pipeline(sc) %>%
   ml_random_forest_classifier()
 
 # Grid
-# grid <- list(random_forest = list(max_depth = c(1,3,5,7,10), num_trees = c(1,3,5,7,10,25,50), max_bins = 317))
 grid <- list(random_forest = list(max_depth = c(1,3,5,7,10), num_trees = c(1,3,5,7,10,25,50)))
 
 # Cross validation
@@ -283,23 +288,12 @@ In this section we will build a random forest pipeline and cross-validate and hy
 ### Building a random forest pipeline
 
 ```{r}
-### remove the classification variable delay, do some dplyr manipulation
-regr_data <- spark_data_one_hot_encoded %>%
-  select(-delay)
-
-### Split in train and test datasets
-train_data_regr <- regr_data %>%
-  sample_frac(0.008)
-test_data_regr <- regr_data %>%
-  sample_frac(0.002)
-
 # Pipeline
 rf_pipeline_regression <- ml_pipeline(sc) %>%
   ft_r_formula(delay_time ~ .) %>%
   ml_random_forest_regressor()
 
 # Grid
-# grid <- list(random_forest = list(max_depth = c(1,3,5,7,10), num_trees = c(1,3,5,7,10,25,50), max_bins = 317))
 grid <- list(random_forest = list(max_depth = c(1,3,5,7,10), num_trees = c(1,3,5,7,10,25,50)))
 
 cv <- ml_cross_validator(
@@ -323,7 +317,7 @@ a[which.max(a$r2),]
 Train a random forest model using the train dataset and get model performance on training data.
 
 ```{r}
-### Train a decision tree model ###
+### Train a random forest model ###
 rf_model_regr <- ml_random_forest_regressor(train_data_regr,
                                         "delay_time ~ .",
                                         num_trees = a[which.max(a$r2),"num_trees_1"],
