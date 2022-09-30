@@ -68,7 +68,8 @@ numer_delay_pipeline <- .%>% main_pipeline %>%
 # Create the classification sub-pipeline
 # Remove the individual delays 
 class_delay_pipeline <- .%>% main_pipeline %>% 
-  select(-carrier_delay,-weather_delay,-nas_delay,-security_delay,-late_aircraft_delay)
+  select(-carrier_delay,-weather_delay,-nas_delay,-security_delay,-late_aircraft_delay) %>%
+  group_by(delay)
 ```
 
 # Splitting data in train and test sets
@@ -78,10 +79,8 @@ Take a sample set of the data to reduce time to train the model.
 ```{r}
 ## Splitted datasets for classification
 train_data <- class_delay_pipeline(raw_data) %>%
-  group_by(delay) %>%
   sample_frac(0.008)
 test_data <- class_delay_pipeline(raw_data) %>%
-  group_by(delay) %>%
   sample_frac(0.002)
 
 ## Splitted datasets for numerical prediction
