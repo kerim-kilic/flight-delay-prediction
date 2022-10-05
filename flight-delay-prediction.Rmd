@@ -121,9 +121,14 @@ cv <- ml_cross_validator(
   seed = 2018
 )
 
+glm_start_time <- Sys.time()
 cv_model <- ml_fit(cv, train_data)
+glm_end_time <- Sys.time()
+# Measure the time it takes to cross validate glm model
+glm_train_time <- glm_end_time - glm_start_time
 
 a <- cv_model$avg_metrics_df
+glm_cv_result <- a[which.max(a$accuracy),"accuracy"]
 ```
 
 
@@ -179,9 +184,13 @@ cv <- ml_cross_validator(
   seed = 2018
 )
 
+tree_start_time <- Sys.time()
 cv_model <- ml_fit(cv, train_data)
+tree_end_time <- Sys.time()
+tree_train_time <- tree_end_time - tree_start_time
 
 a <- cv_model$avg_metrics_df
+tree_cv_result <- a[which.max(a$accuracy),"accuracy"]
 ```
 
 
@@ -238,9 +247,13 @@ cv <- ml_cross_validator(
   seed = 2018
 )
 
+rf_start_time <- Sys.time()
 cv_model <- ml_fit(cv, train_data)
+rf_end_time <- Sys.time()
+rf_train_time <- rf_end_time - rf_start_time
 
 a <- cv_model$avg_metrics_df
+rf_cv_result <- a[which.max(a$accuracy),"accuracy"]
 ```
 
 ### Train a random forest model
@@ -300,11 +313,14 @@ cv <- ml_cross_validator(
   seed = 2018
  )
 
+rf_start_time_regr <- Sys.time()
 cv_model <- ml_fit(cv, train_data_regr)
+rf_end_time_regr <- Sys.time()
+rf_train_time_regr <- rf_end_time_regr - rf_start_time_regr
 
 a <- cv_model$avg_metrics_df
 
-a[which.max(a$r2),]
+rf_cv_result_regr <- a[which.max(a$r2),"r2"]
 ```
 
 ### Train a random forest model
@@ -332,3 +348,28 @@ Make a prediction based on test data and get model performance.
 ml_predict(rf_model_regr,test_data_regr) %>%
   ml_metrics_regression(truth = delay_time, estimate = prediction)
 ```
+
+# Summary of results
+
+## Classification
+
+```{r}
+model_type <- c("glm", "decision tree", "random forest")
+train_time <- c(glm_train_time, tree_train_time, rf_train_time)
+cv_results <- c(glm_cv_result, tree_cv_result, rf_cv_result)
+
+classification_results <- data.frame(model_type, train_time, cv_results)
+classification_results
+```
+
+## Numerical prediction
+
+```{r}
+model_type <- c("random forest")
+train_time <- c(rf_train_time_regr)
+cv_results <- c(rf_cv_result_regr)
+
+numerical_prediction_results <- data.frame(model_type, train_time, cv_results)
+numerical_prediction_results
+```
+
