@@ -386,7 +386,11 @@ rf_regr_tuned_train_time <- rf_regr_tuned_end_time - rf_regr_tuned_start_time
 ### Performance on train set
 augment_value <- augment(rf_model_regr) %>% collect()
 metric_flights <- metric_set(rsq, mae, rmse)
-metric_flights(augment_value, truth = delay_time, estimate = .prediction)
+
+rf_regr_tuned_result_train <- metric_flights(augment_value, truth = delay_time, estimate = .prediction)
+
+rf_regr_tuned_result_train
+
 ml_save(rf_model_regr, "models/rf_model_regression", overwrite = TRUE)
 ```
 
@@ -394,8 +398,10 @@ Make a prediction based on test data and get model performance.
 
 ```{r}
 ### Performance on test set
-ml_predict(rf_model_regr,test_data_regr) %>%
+rf_regr_tuned_result_test <- ml_predict(rf_model_regr,test_data_regr) %>%
   ml_metrics_regression(truth = delay_time, estimate = prediction)
+
+rf_regr_tuned_result_test
 ```
 
 # Summary of results
@@ -441,5 +447,18 @@ tuned_roc_test <- c(glm_tuned_roc_test[1,]$.estimate, tree_tuned_roc_test[1,]$.e
 classification_results <- data.frame(model_type, train_time, tuned_results_train, tuned_results_test, tuned_roc_train, tuned_roc_test)
 colnames(classification_results) <- c("model type", "train time", "Acc. train set", "Acc. test set", "ROC train set", "ROC test set")
 classification_results
+```
+
+### Numerical prediction
+
+```{r}
+model_type <- c("random forest")
+train_time <- c(rf_regr_tuned_train_time)
+tuned_results_train <- c(rf_regr_tuned_result_train[1,]$.estimate)
+tuned_results_test <- c(rf_regr_tuned_result_test[2,]$.estimate) ###
+
+numerical_prediction_results <- data.frame(model_type, train_time, tuned_results_train, tuned_results_test)
+colnames(numerical_prediction_results) <- c("model type", "train time", "R2 train set", "R2 test set")
+numerical_prediction_results
 ```
 
