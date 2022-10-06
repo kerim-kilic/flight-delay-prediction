@@ -148,8 +148,11 @@ glm_tuned_train_time <- glm_tuned_end_time - glm_tuned_start_time
 augment_value <- augment(glm_model) %>% collect()
 augment_value$delay <- as.factor(augment_value$delay)
 augment_value$.predicted_label <- as.factor(augment_value$.predicted_label)
-augment_value %>%
+
+glm_tuned_result_train <- augment_value %>%
   accuracy(estimate = .predicted_label, truth = delay)
+
+glm_tuned_result_train
 
 ml_save(glm_model, "models/glm_model", overwrite = TRUE)
 ```
@@ -160,6 +163,11 @@ Make a prediction based on test data and get model performance.
 ### Performance on test set
 glm_tuned_result <- ml_predict(glm_model,test_data) %>%
   ml_metrics_multiclass()
+
+glm_tuned_roc_test <- ml_predict(glm_model,test_data) %>%
+  ml_metrics_binary()
+
+glm_tuned_roc_test[1,]$.estimate
 
 glm_tuned_result
 ```
@@ -216,8 +224,10 @@ tree_tuned_train_time <- tree_tuned_end_time - tree_tuned_start_time
 augment_value <- augment(tree_model) %>% collect()
 augment_value$delay <- as.factor(augment_value$delay)
 augment_value$.predicted_label <- as.factor(augment_value$.predicted_label)
-augment_value %>%
+
+tree_tuned_result_train <- augment_value %>%
   accuracy(estimate = .predicted_label, truth = delay)
+tree_tuned_result_train
 
 ml_save(tree_model, "models/tree_model_classification", overwrite = TRUE)
 ```
@@ -228,6 +238,9 @@ Make a prediction based on test data and get model performance.
 ### Performance on test set
 tree_tuned_result <- ml_predict(tree_model,test_data) %>%
   ml_metrics_multiclass()
+
+tree_tuned_roc_test <- ml_predict(tree_model,test_data) %>%
+  ml_metrics_binary()
 
 tree_tuned_result
 ```
@@ -284,8 +297,10 @@ rf_tuned_train_time <- rf_tuned_end_time - rf_tuned_start_time
 augment_value <- augment(rf_model) %>% collect()
 augment_value$delay <- as.factor(augment_value$delay)
 augment_value$.predicted_label <- as.factor(augment_value$.predicted_label)
-augment_value %>%
+
+rf_tuned_result_train <- augment_value %>%
   accuracy(estimate = .predicted_label, truth = delay)
+rf_tuned_result_train
 
 ml_save(rf_model, "models/rf_model_classification", overwrite = TRUE)
 ```
@@ -296,6 +311,9 @@ Make a prediction based on test data and get model performance.
 ### Performance on test set
 rf_tuned_result <- ml_predict(rf_model,test_data) %>%
   ml_metrics_multiclass()
+
+rf_tuned_roc_test <- ml_predict(rf_model,test_data) %>%
+  ml_metrics_binary()
 
 rf_tuned_result
 ```
@@ -403,10 +421,12 @@ numerical_prediction_results
 ```{r}
 model_type <- c("glm", "decision tree", "random forest")
 train_time <- c(glm_tuned_train_time, tree_tuned_train_time, rf_tuned_train_time)
+tuned_results_train <- c(glm_tuned_result_train$.estimate, tree_tuned_result_train$.estimate, rf_tuned_result_train$.estimate)
 tuned_results_test <- c(glm_tuned_result$.estimate, tree_tuned_result$.estimate, rf_tuned_result$.estimate)
+tuned_roc_test <- c(glm_tuned_roc_test[1,]$.estimate, tree_tuned_roc_test[1,]$.estimate, rf_tuned_roc_test[1,]$.estimate)
 
-classification_results <- data.frame(model_type, train_time, tuned_results_test)
-colnames(classification_results) <- c("model type", "train time", "Acc. test set")
+classification_results <- data.frame(model_type, train_time, tuned_results_train, tuned_results_test, tuned_roc_test)
+colnames(classification_results) <- c("model type", "train time", "Acc. train set", "Acc. test set", "ROC test set")
 classification_results
 ```
 
