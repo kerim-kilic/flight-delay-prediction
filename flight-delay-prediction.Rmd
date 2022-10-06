@@ -154,6 +154,10 @@ glm_tuned_result_train <- augment_value %>%
 
 glm_tuned_result_train
 
+glm_tuned_roc_train <- augment_value %>%
+  mutate(.predicted_label = as.numeric(as.character(.predicted_label))) %>%
+  roc_auc(estimate = .predicted_label, truth = delay)
+
 ml_save(glm_model, "models/glm_model", overwrite = TRUE)
 ```
 
@@ -229,6 +233,10 @@ tree_tuned_result_train <- augment_value %>%
   accuracy(estimate = .predicted_label, truth = delay)
 tree_tuned_result_train
 
+tree_tuned_roc_train <- augment_value %>%
+  mutate(.predicted_label = as.numeric(as.character(.predicted_label))) %>%
+  roc_auc(estimate = .predicted_label, truth = delay)
+
 ml_save(tree_model, "models/tree_model_classification", overwrite = TRUE)
 ```
 
@@ -301,6 +309,10 @@ augment_value$.predicted_label <- as.factor(augment_value$.predicted_label)
 rf_tuned_result_train <- augment_value %>%
   accuracy(estimate = .predicted_label, truth = delay)
 rf_tuned_result_train
+
+rf_tuned_roc_train <- augment_value %>%
+  mutate(.predicted_label = as.numeric(as.character(.predicted_label))) %>%
+  roc_auc(estimate = .predicted_label, truth = delay)
 
 ml_save(rf_model, "models/rf_model_classification", overwrite = TRUE)
 ```
@@ -423,10 +435,11 @@ model_type <- c("glm", "decision tree", "random forest")
 train_time <- c(glm_tuned_train_time, tree_tuned_train_time, rf_tuned_train_time)
 tuned_results_train <- c(glm_tuned_result_train$.estimate, tree_tuned_result_train$.estimate, rf_tuned_result_train$.estimate)
 tuned_results_test <- c(glm_tuned_result$.estimate, tree_tuned_result$.estimate, rf_tuned_result$.estimate)
+tuned_roc_train <- c(glm_tuned_roc_train[1,]$.estimate, tree_tuned_roc_train[1,]$.estimate, rf_tuned_roc_train[1,]$.estimate)
 tuned_roc_test <- c(glm_tuned_roc_test[1,]$.estimate, tree_tuned_roc_test[1,]$.estimate, rf_tuned_roc_test[1,]$.estimate)
 
-classification_results <- data.frame(model_type, train_time, tuned_results_train, tuned_results_test, tuned_roc_test)
-colnames(classification_results) <- c("model type", "train time", "Acc. train set", "Acc. test set", "ROC test set")
+classification_results <- data.frame(model_type, train_time, tuned_results_train, tuned_results_test, tuned_roc_train, tuned_roc_test)
+colnames(classification_results) <- c("model type", "train time", "Acc. train set", "Acc. test set", "ROC train set", "ROC test set")
 classification_results
 ```
 
