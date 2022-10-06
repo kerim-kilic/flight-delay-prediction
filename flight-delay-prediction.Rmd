@@ -138,9 +138,12 @@ Train a logistic regression model using the full training data set and the param
 
 ```{r}
 ### Train a logistic regression model ###
+glm_tuned_start_time <- Sys.time()
 glm_model <- ml_logistic_regression(train_data, "delay ~ .",
                                     elastic_net_param = a[which.max(a$accuracy),"elastic_net_param_1"],
                                     reg_param = a[which.max(a$accuracy),"reg_param_1"])
+glm_tuned_end_time <- Sys.time()
+glm_tuned_train_time <- glm_tuned_end_time - glm_tuned_start_time
 ### Performance on train set
 augment_value <- augment(glm_model) %>% collect()
 augment_value$delay <- as.factor(augment_value$delay)
@@ -155,8 +158,10 @@ Make a prediction based on test data and get model performance.
 
 ```{r}
 ### Performance on test set
-ml_predict(glm_model,test_data) %>%
+glm_tuned_result <- ml_predict(glm_model,test_data) %>%
   ml_metrics_multiclass()
+
+glm_tuned_result
 ```
 
 ## Decision tree model
@@ -200,9 +205,12 @@ Train a decision tree model using the train dataset and get model performance on
 
 ```{r}
 ### Train a decision tree model ###
+tree_tuned_start_time <- Sys.time()
 tree_model <- ml_decision_tree_classifier(train_data, 
                                           "delay ~ .",
                                           max_depth = a[which.max(a$accuracy),"max_depth_1"])
+tree_tuned_end_time <- Sys.time()
+tree_tuned_train_time <- tree_tuned_end_time - tree_tuned_start_time
 
 ### Performance on train set
 augment_value <- augment(tree_model) %>% collect()
@@ -218,8 +226,10 @@ Make a prediction based on test data and get model performance.
 
 ```{r}
 ### Performance on test set
-ml_predict(tree_model,test_data) %>%
+tree_tuned_result <- ml_predict(tree_model,test_data) %>%
   ml_metrics_multiclass()
+
+tree_tuned_result
 ```
 
 ## Random forest model
@@ -262,10 +272,13 @@ Train a random forest model using the train dataset and get model performance on
 
 ```{r}
 ### Train a decision tree model ###
+rf_tuned_start_time <- Sys.time()
 rf_model <- ml_random_forest_classifier(train_data, 
                                         "delay ~ .", 
                                         num_trees = a[which.max(a$accuracy),"num_trees_1"],
                                         max_depth = a[which.max(a$accuracy),"max_depth_1"])
+rf_tuned_end_time <- Sys.time()
+rf_tuned_train_time <- rf_tuned_end_time - rf_tuned_start_time
 
 ### Performance on train set
 augment_value <- augment(rf_model) %>% collect()
@@ -281,8 +294,10 @@ Make a prediction based on test data and get model performance.
 
 ```{r}
 ### Performance on test set
-ml_predict(rf_model,test_data) %>%
+rf_tuned_result <- ml_predict(rf_model,test_data) %>%
   ml_metrics_multiclass()
+
+rf_tuned_result
 ```
 
 # Numerical prediction of the delay time
@@ -329,10 +344,14 @@ Train a random forest model using the train dataset and get model performance on
 
 ```{r}
 ### Train a random forest model ###
+rf_regr_tuned_start_time <- Sys.time()
 rf_model_regr <- ml_random_forest_regressor(train_data_regr,
                                         "delay_time ~ .",
                                         num_trees = a[which.max(a$r2),"num_trees_1"],
                                         max_depth = a[which.max(a$r2),"max_depth_1"])
+rf_regr_tuned_end_time <- Sys.time()
+rf_regr_tuned_train_time <- rf_regr_tuned_end_time - rf_regr_tuned_start_time
+
 
 ### Performance on train set
 augment_value <- augment(rf_model_regr) %>% collect()
@@ -351,7 +370,9 @@ ml_predict(rf_model_regr,test_data_regr) %>%
 
 # Summary of results
 
-## Classification
+## Cross validation
+
+### Classification
 
 ```{r}
 model_type <- c("glm", "decision tree", "random forest")
@@ -359,10 +380,11 @@ train_time <- c(glm_train_time, tree_train_time, rf_train_time)
 cv_results <- c(glm_cv_result, tree_cv_result, rf_cv_result)
 
 classification_results <- data.frame(model_type, train_time, cv_results)
+colnames(classification_results) <- c("model type", "train time", "cv accuracy")
 classification_results
 ```
 
-## Numerical prediction
+### Numerical prediction
 
 ```{r}
 model_type <- c("random forest")
@@ -370,6 +392,21 @@ train_time <- c(rf_train_time_regr)
 cv_results <- c(rf_cv_result_regr)
 
 numerical_prediction_results <- data.frame(model_type, train_time, cv_results)
+colnames(numerical_prediction_results) <- c("model type", "train time", "cv r-squared")
 numerical_prediction_results
+```
+
+## Final tuned models
+
+### Classification
+
+```{r}
+model_type <- c("glm", "decision tree", "random forest")
+train_time <- c(glm_tuned_train_time, tree_tuned_train_time, rf_tuned_train_time)
+tuned_results_test <- c(glm_tuned_result$.estimate, tree_tuned_result$.estimate, rf_tuned_result$.estimate)
+
+classification_results <- data.frame(model_type, train_time, tuned_results_test)
+colnames(classification_results) <- c("model type", "train time", "Acc. test set")
+classification_results
 ```
 
