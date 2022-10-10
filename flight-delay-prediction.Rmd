@@ -53,7 +53,8 @@ main_pipeline <- .%>%
   select(-id,-year,-wheels_on_time,-wheels_off_time,-planned_departure_time,
          -planned_arrival_time,-actual_departure_time,-actual_arrival_time,
          -tail_number,-flight_number,-carrier,-origin,-destination,
-         -cancelled_flag,-diverted_flag,-num_flights) %>%
+         -cancelled_flag,-diverted_flag,-num_flights,
+         -actual_arrival_local_hour, -actual_departure_local_hour) %>%
   na.omit() %>%
   mutate(delay = case_when(carrier_delay + weather_delay + nas_delay + security_delay + late_aircraft_delay > 0 ~ "1",
                            carrier_delay + weather_delay + nas_delay + security_delay + late_aircraft_delay == 0 ~ "0"))
@@ -70,6 +71,9 @@ numer_delay_pipeline <- .%>% main_pipeline %>%
 class_delay_pipeline <- .%>% main_pipeline %>% 
   select(-carrier_delay,-weather_delay,-nas_delay,-security_delay,-late_aircraft_delay) %>%
   group_by(delay)
+
+# class_delay_pipeline(raw_data) %>% glimpse()
+# numer_delay_pipeline(raw_data) %>% glimpse()
 ```
 
 # Splitting data in train and test sets
