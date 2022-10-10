@@ -21,6 +21,7 @@ library(data.table)
 library(tidymodels)
 library(sparklyr)
 library(kableExtra)
+source("src/functions.R")
 ```
 
 # Initialize spark and read in data
@@ -161,16 +162,8 @@ glm_model <- ml_logistic_regression(train_data, "delay ~ .",
 glm_tuned_end_time <- Sys.time()
 glm_tuned_train_time <- glm_tuned_end_time - glm_tuned_start_time
 ### Performance on train set
-augment_value <- augment(glm_model) %>% collect()
-augment_value$delay <- as.factor(augment_value$delay)
-augment_value$.predicted_label <- as.factor(augment_value$.predicted_label)
 
-glm_tuned_result_train <- augment_value %>%
-  accuracy(estimate = .predicted_label, truth = delay)
-
-glm_tuned_roc_train <- augment_value %>%
-  mutate(.predicted_label = as.numeric(as.character(.predicted_label))) %>%
-  roc_auc(estimate = .predicted_label, truth = delay)
+glm_tuned_result_train <- generate_metrics_classification(glm_model)
 
 glm_tuned_result_train %>% 
   kbl() %>%
@@ -248,16 +241,7 @@ tree_tuned_end_time <- Sys.time()
 tree_tuned_train_time <- tree_tuned_end_time - tree_tuned_start_time
 
 ### Performance on train set
-augment_value <- augment(tree_model) %>% collect()
-augment_value$delay <- as.factor(augment_value$delay)
-augment_value$.predicted_label <- as.factor(augment_value$.predicted_label)
-
-tree_tuned_result_train <- augment_value %>%
-  accuracy(estimate = .predicted_label, truth = delay)
-
-tree_tuned_roc_train <- augment_value %>%
-  mutate(.predicted_label = as.numeric(as.character(.predicted_label))) %>%
-  roc_auc(estimate = .predicted_label, truth = delay)
+tree_tuned_result_train <- generate_metrics_classification(tree_model)
 
 tree_tuned_result_train %>% 
   kbl() %>%
@@ -334,16 +318,7 @@ rf_tuned_end_time <- Sys.time()
 rf_tuned_train_time <- rf_tuned_end_time - rf_tuned_start_time
 
 ### Performance on train set
-augment_value <- augment(rf_model) %>% collect()
-augment_value$delay <- as.factor(augment_value$delay)
-augment_value$.predicted_label <- as.factor(augment_value$.predicted_label)
-
-rf_tuned_result_train <- augment_value %>%
-  accuracy(estimate = .predicted_label, truth = delay)
-
-rf_tuned_roc_train <- augment_value %>%
-  mutate(.predicted_label = as.numeric(as.character(.predicted_label))) %>%
-  roc_auc(estimate = .predicted_label, truth = delay)
+rf_tuned_result_train <- generate_metrics_classification(rf_model)
 
 rf_tuned_result_train %>% 
   kbl() %>%
@@ -423,7 +398,6 @@ rf_model_regr <- ml_random_forest_regressor(train_data_regr,
 rf_regr_tuned_end_time <- Sys.time()
 rf_regr_tuned_train_time <- rf_regr_tuned_end_time - rf_regr_tuned_start_time
 
-
 ### Performance on train set
 augment_value <- augment(rf_model_regr) %>% collect()
 metric_flights <- metric_set(rsq, mae, rmse)
@@ -490,19 +464,52 @@ numerical_prediction_results %>%
 ### Classification
 
 ```{r}
+# Model metrics on the train set
 model_type <- c("glm", "decision tree", "random forest")
-train_time <- c(glm_tuned_train_time, tree_tuned_train_time, rf_tuned_train_time)
-tuned_results_train <- c(glm_tuned_result_train$.estimate, tree_tuned_result_train$.estimate, rf_tuned_result_train$.estimate)
-tuned_results_test <- c(glm_tuned_result$.estimate, tree_tuned_result$.estimate, rf_tuned_result$.estimate)
-tuned_roc_train <- c(glm_tuned_roc_train[1,]$.estimate, tree_tuned_roc_train[1,]$.estimate, rf_tuned_roc_train[1,]$.estimate)
-tuned_roc_test <- c(glm_tuned_roc_test[1,]$.estimate, tree_tuned_roc_test[1,]$.estimate, rf_tuned_roc_test[1,]$.estimate)
+train_time <- round(c(glm_tuned_train_time, tree_tuned_train_time, rf_tuned_train_time),3)
+accuracy_results_train <- c(glm_tuned_result_train[1,]$value, tree_tuned_result_train[1,]$value, rf_tuned_result_train[1,]$value)
+accuracy_results_test <- c(glm_tuned_result$.estimate, tree_tuned_result$.estimate, rf_tuned_result$.estimate)
+sensitivity_results_train <- c(glm_tuned_result_train[2,]$value, tree_tuned_result_train[2,]$value, rf_tuned_result_train[2,]$value)
+specificity_results_train <- c(glm_tuned_result_train[3,]$value, tree_tuned_result_train[3,]$value, rf_tuned_result_train[3,]$value)
+precision_results_train <- c(glm_tuned_result_train[4,]$value, tree_tuned_result_train[4,]$value, rf_tuned_result_train[4,]$value)
+recall_results_train <- c(glm_tuned_result_train[5,]$value, tree_tuned_result_train[5,]$value, rf_tuned_result_train[5,]$value)
+roc_auc_results_train <- c(glm_tuned_result_train[1,]$value, tree_tuned_result_train[1,]$value, rf_tuned_result_train[1,]$value)
+roc_auc_results_test <- c(glm_tuned_roc_test[1,]$.estimate, tree_tuned_roc_test[1,]$.estimate, rf_tuned_roc_test[1,]$.estimate)
 
-classification_results <- data.frame(model_type, train_time, tuned_results_train, tuned_results_test, tuned_roc_train, tuned_roc_test)
-colnames(classification_results) <- c("model type", "train time", "Acc. train set", "Acc. test set", "ROC train set", "ROC test set")
-classification_results %>% 
+classification_results_train <- data.frame(model_type, 
+                                     train_time, 
+                                     accuracy_results_train, 
+                                     sensitivity_results_train,
+                                     specificity_results_train,
+                                     precision_results_train,
+                                     recall_results_train,
+                                     roc_auc_results_train)
+colnames(classification_results_train) <- c("model type", 
+                                      "train time", 
+                                      "Acc. train set", 
+                                      "Sensitivity train set",
+                                      "Specificity train set",
+                                      "Precision train set",
+                                      "Recall train set",
+                                      "ROC train set")
+classification_results_train %>% 
   kbl() %>%
   kable_minimal()
 ```
+
+```{r}
+# Model metrics on the test set
+classification_results_train <- data.frame(model_type, 
+                                     accuracy_results_test,  
+                                     roc_auc_results_test)
+colnames(classification_results_train) <- c("model type",
+                                      "Acc. test set", 
+                                      "ROC test set")
+classification_results_train %>% 
+  kbl() %>%
+  kable_minimal()
+```
+
 
 ### Numerical prediction
 
