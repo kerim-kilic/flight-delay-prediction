@@ -163,7 +163,7 @@ glm_tuned_end_time <- Sys.time()
 glm_tuned_train_time <- glm_tuned_end_time - glm_tuned_start_time
 ### Performance on train set
 
-glm_tuned_result_train <- generate_metrics_classification(glm_model)
+glm_tuned_result_train <- generate_metrics_classification(glm_model,"train")
 
 glm_tuned_result_train %>% 
   kbl() %>%
@@ -181,11 +181,18 @@ Make a prediction based on test data and get model performance.
 
 ```{r}
 ### Performance on test set
-glm_tuned_result <- ml_predict(glm_model,test_data) %>%
-  ml_metrics_multiclass()
+# glm_tuned_result <- ml_predict(glm_model,test_data) %>%
+#   ml_metrics_multiclass()
+# 
+# ml_predict(glm_model,test_data) %>%
+#   ml_metrics_multiclass(metrics = "accuracy")
+# 
+# glm_tuned_roc_test <- ml_predict(glm_model,test_data) %>%
+#   ml_metrics_binary()
 
-glm_tuned_roc_test <- ml_predict(glm_model,test_data) %>%
-  ml_metrics_binary()
+glm_tuned_result <- generate_metrics_classification(glm_model,
+                                                    "test",
+                                                    test_data)
 
 glm_tuned_result %>% 
   kbl() %>%
@@ -241,7 +248,7 @@ tree_tuned_end_time <- Sys.time()
 tree_tuned_train_time <- tree_tuned_end_time - tree_tuned_start_time
 
 ### Performance on train set
-tree_tuned_result_train <- generate_metrics_classification(tree_model)
+tree_tuned_result_train <- generate_metrics_classification(tree_model,"train")
 
 tree_tuned_result_train %>% 
   kbl() %>%
@@ -258,11 +265,9 @@ Make a prediction based on test data and get model performance.
 
 ```{r}
 ### Performance on test set
-tree_tuned_result <- ml_predict(tree_model,test_data) %>%
-  ml_metrics_multiclass()
-
-tree_tuned_roc_test <- ml_predict(tree_model,test_data) %>%
-  ml_metrics_binary()
+tree_tuned_result <- generate_metrics_classification(tree_model,
+                                                    "test",
+                                                    test_data)
 
 tree_tuned_result %>% 
   kbl() %>%
@@ -318,7 +323,7 @@ rf_tuned_end_time <- Sys.time()
 rf_tuned_train_time <- rf_tuned_end_time - rf_tuned_start_time
 
 ### Performance on train set
-rf_tuned_result_train <- generate_metrics_classification(rf_model)
+rf_tuned_result_train <- generate_metrics_classification(rf_model,"train")
 
 rf_tuned_result_train %>% 
   kbl() %>%
@@ -335,11 +340,9 @@ Make a prediction based on test data and get model performance.
 
 ```{r}
 ### Performance on test set
-rf_tuned_result <- ml_predict(rf_model,test_data) %>%
-  ml_metrics_multiclass()
-
-rf_tuned_roc_test <- ml_predict(rf_model,test_data) %>%
-  ml_metrics_binary()
+rf_tuned_result <- generate_metrics_classification(rf_model,
+                                                    "test",
+                                                    test_data)
 
 rf_tuned_result %>% 
   kbl() %>%
@@ -468,13 +471,12 @@ numerical_prediction_results %>%
 model_type <- c("glm", "decision tree", "random forest")
 train_time <- round(c(glm_tuned_train_time, tree_tuned_train_time, rf_tuned_train_time),3)
 accuracy_results_train <- c(glm_tuned_result_train[1,]$value, tree_tuned_result_train[1,]$value, rf_tuned_result_train[1,]$value)
-accuracy_results_test <- c(glm_tuned_result$.estimate, tree_tuned_result$.estimate, rf_tuned_result$.estimate)
 sensitivity_results_train <- c(glm_tuned_result_train[2,]$value, tree_tuned_result_train[2,]$value, rf_tuned_result_train[2,]$value)
 specificity_results_train <- c(glm_tuned_result_train[3,]$value, tree_tuned_result_train[3,]$value, rf_tuned_result_train[3,]$value)
 precision_results_train <- c(glm_tuned_result_train[4,]$value, tree_tuned_result_train[4,]$value, rf_tuned_result_train[4,]$value)
 recall_results_train <- c(glm_tuned_result_train[5,]$value, tree_tuned_result_train[5,]$value, rf_tuned_result_train[5,]$value)
-roc_auc_results_train <- c(glm_tuned_result_train[1,]$value, tree_tuned_result_train[1,]$value, rf_tuned_result_train[1,]$value)
-roc_auc_results_test <- c(glm_tuned_roc_test[1,]$.estimate, tree_tuned_roc_test[1,]$.estimate, rf_tuned_roc_test[1,]$.estimate)
+roc_auc_results_train <- c(glm_tuned_result_train[6,]$value, tree_tuned_result_train[6,]$value, rf_tuned_result_train[6,]$value)
+pr_auc_results_train <- c(glm_tuned_result_train[7,]$value, tree_tuned_result_train[7,]$value, rf_tuned_result_train[7,]$value)
 
 classification_results_train <- data.frame(model_type, 
                                      train_time, 
@@ -483,15 +485,17 @@ classification_results_train <- data.frame(model_type,
                                      specificity_results_train,
                                      precision_results_train,
                                      recall_results_train,
-                                     roc_auc_results_train)
+                                     roc_auc_results_train,
+                                     pr_auc_results_train)
 colnames(classification_results_train) <- c("model type", 
                                       "train time", 
-                                      "Acc. train set", 
-                                      "Sensitivity train set",
-                                      "Specificity train set",
-                                      "Precision train set",
-                                      "Recall train set",
-                                      "ROC train set")
+                                      "accuracy", 
+                                      "Sensitivity",
+                                      "Specificity",
+                                      "Precision",
+                                      "Recall",
+                                      "roc_auc",
+                                      "pr_auc")
 classification_results_train %>% 
   kbl() %>%
   kable_minimal()
@@ -499,12 +503,27 @@ classification_results_train %>%
 
 ```{r}
 # Model metrics on the test set
+accuracy_results_test <- c(glm_tuned_result[1,]$value, tree_tuned_result[1,]$value, rf_tuned_result[1,]$value)
+recall_results_test <- c(glm_tuned_result[2,]$value, tree_tuned_result[2,]$value, rf_tuned_result[2,]$value)
+precision_results_test <- c(glm_tuned_result[3,]$value, tree_tuned_result[3,]$value, rf_tuned_result[3,]$value)
+f1_results_test <- c(glm_tuned_result[4,]$value, tree_tuned_result[4,]$value, rf_tuned_result[4,]$value)
+roc_auc_results_test <- c(glm_tuned_result[5,]$value, tree_tuned_result[5,]$value, rf_tuned_result[5,]$value)
+pr_auc_results_test <- c(glm_tuned_result[6,]$value, tree_tuned_result[6,]$value, rf_tuned_result[6,]$value)
+
 classification_results_train <- data.frame(model_type, 
-                                     accuracy_results_test,  
-                                     roc_auc_results_test)
-colnames(classification_results_train) <- c("model type",
-                                      "Acc. test set", 
-                                      "ROC test set")
+                                     accuracy_results_test,
+                                     recall_results_test,
+                                     precision_results_test,
+                                     f1_results_test,
+                                     roc_auc_results_test,
+                                     pr_auc_results_test)
+colnames(classification_results_train) <- c("model",
+                                      "accuracy", 
+                                      "recall",
+                                      "precision",
+                                      "f1",
+                                      "roc_auc",
+                                      "pr_auc")
 classification_results_train %>% 
   kbl() %>%
   kable_minimal()
