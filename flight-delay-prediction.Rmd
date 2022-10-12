@@ -457,8 +457,9 @@ numerical_prediction_results %>%
 
 ### Classification
 
-```{r}
-# Model metrics on the train set
+Summary of model metrics on the train set
+
+```{r, echo=FALSE}
 model_type <- c("glm", "decision tree", "random forest")
 train_time <- round(c(glm_tuned_train_time, tree_tuned_train_time, rf_tuned_train_time),3)
 
@@ -497,8 +498,9 @@ classification_results_train %>%
   kable_minimal()
 ```
 
-```{r}
-# Model metrics on the test set
+Summary of model metrics on the test set
+
+```{r, echo=FALSE}
 accuracy_results_test <- c(glm_tuned_result[1,]$value, tree_tuned_result[1,]$value, rf_tuned_result[1,]$value)
 recall_results_test <- c(glm_tuned_result[2,]$value, tree_tuned_result[2,]$value, rf_tuned_result[2,]$value)
 precision_results_test <- c(glm_tuned_result[3,]$value, tree_tuned_result[3,]$value, rf_tuned_result[3,]$value)
@@ -531,19 +533,36 @@ classification_results_train %>%
   kable_minimal()
 ```
 
-
 ### Numerical prediction
 
-```{r}
+Summary of model metrics on the train set
+
+```{r, echo=FALSE}
 model_type <- c("random forest")
 train_time <- c(rf_regr_tuned_train_time)
-tuned_results_train <- c(rf_regr_tuned_result_train[1,]$.estimate)
-tuned_results_test <- c(rf_regr_tuned_result_test[2,]$.estimate) ###
+r2_results_train <- c(rf_regr_tuned_result_train[1,]$.estimate)
+mae_results_train <- c(rf_regr_tuned_result_train[2,]$.estimate)
+rmse_results_train <- c(rf_regr_tuned_result_train[3,]$.estimate)
 
-numerical_prediction_results <- data.frame(model_type, train_time, tuned_results_train, tuned_results_test)
-colnames(numerical_prediction_results) <- c("model type", "train time", "R2 train set", "R2 test set")
+numerical_prediction_results <- data.frame(model_type, train_time, r2_results_train, mae_results_train, rmse_results_train)
+colnames(numerical_prediction_results) <- c("model type", "train time", "R2", "MAE", "RMSE")
+
 numerical_prediction_results %>% 
   kbl() %>%
   kable_minimal()
 ```
 
+Summary of model metrics on the test set
+
+```{r, echo=FALSE}
+r2_results_test <- c(rf_regr_tuned_result_test[2,]$.estimate)
+mae_results_test <- c(rf_regr_tuned_result_test[3,]$.estimate)
+rmse_results_test <- c(rf_regr_tuned_result_test[1,]$.estimate)
+
+numerical_prediction_results <- data.frame(model_type, train_time, r2_results_test, mae_results_test, rmse_results_test)
+colnames(numerical_prediction_results) <- c("model type", "train time", "R2", "MAE", "RMSE")
+
+numerical_prediction_results %>% 
+  kbl() %>%
+  kable_minimal()
+```
