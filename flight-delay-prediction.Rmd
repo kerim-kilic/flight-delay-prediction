@@ -163,7 +163,8 @@ glm_tuned_end_time <- Sys.time()
 glm_tuned_train_time <- glm_tuned_end_time - glm_tuned_start_time
 ### Performance on train set
 
-glm_tuned_result_train <- generate_metrics_classification(glm_model,"train")
+glm_tuned_result_train <- generate_metrics_classification(model = glm_model,
+                                                          type = "train")
 
 glm_tuned_result_train %>% 
   kbl() %>%
@@ -176,20 +177,10 @@ Save the model to be able to reuse it later on predictions.
 ml_save(glm_model, "models/glm_model", overwrite = TRUE)
 ```
 
-
 Make a prediction based on test data and get model performance.
 
 ```{r}
 ### Performance on test set
-# glm_tuned_result <- ml_predict(glm_model,test_data) %>%
-#   ml_metrics_multiclass()
-# 
-# ml_predict(glm_model,test_data) %>%
-#   ml_metrics_multiclass(metrics = "accuracy")
-# 
-# glm_tuned_roc_test <- ml_predict(glm_model,test_data) %>%
-#   ml_metrics_binary()
-
 glm_tuned_result <- generate_metrics_classification(glm_model,
                                                     "test",
                                                     test_data)
@@ -470,30 +461,35 @@ numerical_prediction_results %>%
 # Model metrics on the train set
 model_type <- c("glm", "decision tree", "random forest")
 train_time <- round(c(glm_tuned_train_time, tree_tuned_train_time, rf_tuned_train_time),3)
+
 accuracy_results_train <- c(glm_tuned_result_train[1,]$value, tree_tuned_result_train[1,]$value, rf_tuned_result_train[1,]$value)
-sensitivity_results_train <- c(glm_tuned_result_train[2,]$value, tree_tuned_result_train[2,]$value, rf_tuned_result_train[2,]$value)
-specificity_results_train <- c(glm_tuned_result_train[3,]$value, tree_tuned_result_train[3,]$value, rf_tuned_result_train[3,]$value)
-precision_results_train <- c(glm_tuned_result_train[4,]$value, tree_tuned_result_train[4,]$value, rf_tuned_result_train[4,]$value)
-recall_results_train <- c(glm_tuned_result_train[5,]$value, tree_tuned_result_train[5,]$value, rf_tuned_result_train[5,]$value)
-roc_auc_results_train <- c(glm_tuned_result_train[6,]$value, tree_tuned_result_train[6,]$value, rf_tuned_result_train[6,]$value)
-pr_auc_results_train <- c(glm_tuned_result_train[7,]$value, tree_tuned_result_train[7,]$value, rf_tuned_result_train[7,]$value)
+recall_results_train <- c(glm_tuned_result_train[2,]$value, tree_tuned_result_train[2,]$value, rf_tuned_result_train[2,]$value)
+precision_results_train <- c(glm_tuned_result_train[3,]$value, tree_tuned_result_train[3,]$value, rf_tuned_result_train[3,]$value)
+missclassification_results_train<- c(glm_tuned_result_train[4,]$value, tree_tuned_result_train[4,]$value, rf_tuned_result_train[4,]$value)
+specificity_results_train <- c(glm_tuned_result_train[5,]$value, tree_tuned_result_train[5,]$value, rf_tuned_result_train[5,]$value)
+f1_results_train <- c(glm_tuned_result_train[6,]$value, tree_tuned_result_train[6,]$value, rf_tuned_result_train[6,]$value)
+roc_auc_results_train <- c(glm_tuned_result_train[7,]$value, tree_tuned_result_train[7,]$value, rf_tuned_result_train[7,]$value)
+pr_auc_results_train <- c(glm_tuned_result_train[8,]$value, tree_tuned_result_train[8,]$value, rf_tuned_result_train[8,]$value)
 
 classification_results_train <- data.frame(model_type, 
                                      train_time, 
                                      accuracy_results_train, 
-                                     sensitivity_results_train,
-                                     specificity_results_train,
-                                     precision_results_train,
                                      recall_results_train,
+                                     precision_results_train,
+                                     missclassification_results_train,
+                                     specificity_results_train,
+                                     f1_results_train,
                                      roc_auc_results_train,
                                      pr_auc_results_train)
+
 colnames(classification_results_train) <- c("model type", 
                                       "train time", 
                                       "accuracy", 
-                                      "Sensitivity",
-                                      "Specificity",
-                                      "Precision",
-                                      "Recall",
+                                      "recall",
+                                      "precision",
+                                      "missclassification",
+                                      "specificity",
+                                      "f1",
                                       "roc_auc",
                                       "pr_auc")
 classification_results_train %>% 
@@ -506,14 +502,18 @@ classification_results_train %>%
 accuracy_results_test <- c(glm_tuned_result[1,]$value, tree_tuned_result[1,]$value, rf_tuned_result[1,]$value)
 recall_results_test <- c(glm_tuned_result[2,]$value, tree_tuned_result[2,]$value, rf_tuned_result[2,]$value)
 precision_results_test <- c(glm_tuned_result[3,]$value, tree_tuned_result[3,]$value, rf_tuned_result[3,]$value)
-f1_results_test <- c(glm_tuned_result[4,]$value, tree_tuned_result[4,]$value, rf_tuned_result[4,]$value)
-roc_auc_results_test <- c(glm_tuned_result[5,]$value, tree_tuned_result[5,]$value, rf_tuned_result[5,]$value)
-pr_auc_results_test <- c(glm_tuned_result[6,]$value, tree_tuned_result[6,]$value, rf_tuned_result[6,]$value)
+missclassification_results_test <- c(glm_tuned_result[4,]$value, tree_tuned_result[4,]$value, rf_tuned_result[4,]$value)
+specificity_results_test <- c(glm_tuned_result[5,]$value, tree_tuned_result[5,]$value, rf_tuned_result[5,]$value)
+f1_results_test <- c(glm_tuned_result[6,]$value, tree_tuned_result[6,]$value, rf_tuned_result[6,]$value)
+roc_auc_results_test <- c(glm_tuned_result[7,]$value, tree_tuned_result[7,]$value, rf_tuned_result[7,]$value)
+pr_auc_results_test <- c(glm_tuned_result[8,]$value, tree_tuned_result[8,]$value, rf_tuned_result[8,]$value)
 
 classification_results_train <- data.frame(model_type, 
                                      accuracy_results_test,
                                      recall_results_test,
                                      precision_results_test,
+                                     missclassification_results_test,
+                                     specificity_results_test,
                                      f1_results_test,
                                      roc_auc_results_test,
                                      pr_auc_results_test)
@@ -521,6 +521,8 @@ colnames(classification_results_train) <- c("model",
                                       "accuracy", 
                                       "recall",
                                       "precision",
+                                      "missclassification",
+                                      "specificity",
                                       "f1",
                                       "roc_auc",
                                       "pr_auc")
