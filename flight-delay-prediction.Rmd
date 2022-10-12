@@ -82,8 +82,20 @@ Take a sample set of the data to reduce time to train the model.
 
 ```{r, message=FALSE}
 ## Splitted datasets for classification
-train_data <- class_delay_pipeline(raw_data) %>%
-  sample_frac(0.008)
+# Imbalanced training set
+# train_data <- class_delay_pipeline(raw_data) %>%
+#   sample_frac(0.008)
+# Balanced training set using under sampling
+delay_yes <- class_delay_pipeline(raw_data) %>%
+  filter(delay == "1")
+delay_no <- class_delay_pipeline(raw_data) %>%
+  filter(delay == "0")
+tmp1 <- delay_yes %>% 
+  sample_n(22281)
+tmp2 <- delay_no %>% 
+  sample_n(22281)
+train_data <- rbind(tmp1, tmp2)
+
 test_data <- class_delay_pipeline(raw_data) %>%
   sample_frac(0.002)
 
