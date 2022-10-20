@@ -145,8 +145,13 @@ glm_cv <- cross_validator(sc = sc,
 
 # Get model results
 a <- glm_cv$all_results
-glm_cv_result <- glm_cv$best_result
+glm_cv_best_result <- glm_cv$best_result
+glm_cv_result <- glm_cv_best_result[which.max(glm_cv_best_result$accuracy),"accuracy"]
 glm_train_time <- glm_cv$train_time
+a[order(-a$accuracy),] %>% 
+  head(5) %>%
+  kbl() %>%
+  kable_minimal()
 ```
 
 
@@ -158,8 +163,8 @@ Train a logistic regression model using the full training data set and the param
 ### Train a logistic regression model ###
 glm_tuned_start_time <- Sys.time()
 glm_model <- ml_logistic_regression(train_data, "delay ~ .",
-                                    elastic_net_param = a[which.max(a$accuracy),"elastic_net_param_1"],
-                                    reg_param = a[which.max(a$accuracy),"reg_param_1"])
+                                    elastic_net_param = glm_cv_best_result[which.max(glm_cv_best_result$accuracy),"elastic_net_param_1"],
+                                    reg_param = glm_cv_best_result[which.max(glm_cv_best_result$accuracy),"reg_param_1"])
 glm_tuned_end_time <- Sys.time()
 glm_tuned_train_time <- glm_tuned_end_time - glm_tuned_start_time
 ### Performance on train set
@@ -217,8 +222,13 @@ tree_cv <- cross_validator(sc = sc,
 
 # Get model results
 a <- tree_cv$all_results
-tree_cv_result <- tree_cv$best_result 
+tree_cv_best_result <- tree_cv$best_result
+tree_cv_result <- tree_cv_best_result[which.max(tree_cv_best_result$accuracy),"accuracy"]
 tree_train_time <- tree_cv$train_time
+a[order(-a$accuracy),] %>% 
+  head(5) %>%
+  kbl() %>%
+  kable_minimal()
 ```
 
 
@@ -231,7 +241,7 @@ Train a decision tree model using the train dataset and get model performance on
 tree_tuned_start_time <- Sys.time()
 tree_model <- ml_decision_tree_classifier(train_data, 
                                           "delay ~ .",
-                                          max_depth = a[which.max(a$accuracy),"max_depth_1"])
+                                          max_depth = tree_cv_best_result[which.max(tree_cv_best_result$accuracy),"max_depth_1"])
 tree_tuned_end_time <- Sys.time()
 tree_tuned_train_time <- tree_tuned_end_time - tree_tuned_start_time
 
@@ -288,8 +298,13 @@ rf_cv <- cross_validator(sc = sc,
 
 # Get model results
 a <- rf_cv$all_results
-rf_cv_result <- rf_cv$best_result
+rf_cv_best_result <- rf_cv$best_result
+rf_cv_result <- rf_cv_best_result[which.max(rf_cv_best_result$accuracy),"accuracy"]
 rf_train_time <- rf_cv$train_time
+a[order(-a$accuracy),] %>% 
+  head(5) %>%
+  kbl() %>%
+  kable_minimal()
 ```
 
 ### Train a random forest model
@@ -301,8 +316,8 @@ Train a random forest model using the train dataset and get model performance on
 rf_tuned_start_time <- Sys.time()
 rf_model <- ml_random_forest_classifier(train_data, 
                                         "delay ~ .", 
-                                        num_trees = a[which.max(a$accuracy),"num_trees_1"],
-                                        max_depth = a[which.max(a$accuracy),"max_depth_1"])
+                                        num_trees = rf_cv_best_result[which.max(rf_cv_best_result$accuracy),"num_trees_1"],
+                                        max_depth = rf_cv_best_result[which.max(rf_cv_best_result$accuracy),"max_depth_1"])
 rf_tuned_end_time <- Sys.time()
 rf_tuned_train_time <- rf_tuned_end_time - rf_tuned_start_time
 
@@ -363,8 +378,13 @@ rf_cv <- cross_validator(sc = sc,
 
 # Get model results
 a <- rf_cv$all_results
-rf_cv_result_regr <- rf_cv$best_result 
+rf_cv_best_result_regr <- rf_cv$best_result 
+rf_cv_result_regr <- rf_cv_best_result_regr[which.max(rf_cv_best_result_regr$r2),"r2"]
 rf_train_time_regr <- rf_cv$train_time
+a[order(-a$r2),] %>% 
+  head(5) %>%
+  kbl() %>%
+  kable_minimal()
 ```
 
 ### Train a random forest model
@@ -376,8 +396,8 @@ Train a random forest model using the train dataset and get model performance on
 rf_regr_tuned_start_time <- Sys.time()
 rf_model_regr <- ml_random_forest_regressor(train_data_regr,
                                         "delay_time ~ .",
-                                        num_trees = a[which.max(a$r2),"num_trees_1"],
-                                        max_depth = a[which.max(a$r2),"max_depth_1"])
+                                        num_trees = rf_cv_best_result_regr[which.max(rf_cv_best_result_regr$r2),"num_trees_1"],
+                                        max_depth = rf_cv_best_result_regr[which.max(rf_cv_best_result_regr$r2),"max_depth_1"])
 rf_regr_tuned_end_time <- Sys.time()
 rf_regr_tuned_train_time <- rf_regr_tuned_end_time - rf_regr_tuned_start_time
 

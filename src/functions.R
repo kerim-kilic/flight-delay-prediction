@@ -174,11 +174,13 @@ cross_validator <- function(sc,
   cv_results <- cv_model$avg_metrics_df
   if(type == "classification")
   {
-    best_cv_result <- cv_results[which.max(cv_results$accuracy),"accuracy"]  
+    # best_cv_result <- cv_results[which.max(cv_results$accuracy),"accuracy"]
+    best_cv_result <- cv_results[which.max(cv_results$accuracy),]
   }
   if(type == "numerical")
   {
-    best_cv_result <- cv_results[which.max(cv_results$r2),"r2"]  
+    # best_cv_result <- cv_results[which.max(cv_results$r2),"r2"] 
+    best_cv_result <- cv_results[which.max(cv_results$r2),] 
   }
    
   final_cv_results <- list(all_results = cv_results,
