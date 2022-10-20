@@ -84,18 +84,20 @@ Take a sample set of the data to reduce time to train the model.
 ```{r, message=FALSE}
 # Split for classification
 classification_split <- create_train_test_split(data = class_delay_pipeline(raw_data),
-                                      sample_size = 100000,
-                                      ratio = 0.8,
-                                      type = "classification")
-train_data <- classification_split[[1]]
-test_data <- classification_split[[2]]
+                                                sample_size = 100000,
+                                                ratio = 0.8,
+                                                type = "classification")
+train_data <- classification_split$train_data
+test_data <- classification_split$test_data
 # Split for numerical predictions
 numerical_split <- create_train_test_split(data = numer_delay_pipeline(raw_data),
                                       sample_size = 100000,
                                       ratio = 0.8,
                                       type = "numerical")
-train_data_regr <- numerical_split[[1]]
-test_data_regr <- numerical_split[[2]]
+train_data_regr <- numerical_split$train_data
+test_data_regr <- numerical_split$test_data
+
+rm(raw_data)
 ```
 
 Let's glimpse into the train data for classification.
@@ -142,9 +144,9 @@ glm_cv <- cross_validator(sc = sc,
                           seed = 2018)
 
 # Get model results
-a <- glm_cv[[1]]
-glm_cv_result <- glm_cv[[2]] 
-glm_train_time <- glm_cv[[3]]
+a <- glm_cv$all_results
+glm_cv_result <- glm_cv$best_result
+glm_train_time <- glm_cv$train_time
 ```
 
 
@@ -214,9 +216,9 @@ tree_cv <- cross_validator(sc = sc,
                            seed = 2018)
 
 # Get model results
-a <- tree_cv[[1]]
-tree_cv_result <- tree_cv[[2]] 
-tree_train_time <- tree_cv[[3]]
+a <- tree_cv$all_results
+tree_cv_result <- tree_cv$best_result 
+tree_train_time <- tree_cv$train_time
 ```
 
 
@@ -285,9 +287,9 @@ rf_cv <- cross_validator(sc = sc,
                          seed = 2018)
 
 # Get model results
-a <- rf_cv[[1]]
-rf_cv_result <- rf_cv[[2]] 
-rf_train_time <- rf_cv[[3]]
+a <- rf_cv$all_results
+rf_cv_result <- rf_cv$best_result
+rf_train_time <- rf_cv$train_time
 ```
 
 ### Train a random forest model
@@ -360,9 +362,9 @@ rf_cv <- cross_validator(sc = sc,
                          seed = 2018)
 
 # Get model results
-a <- rf_cv[[1]]
-rf_cv_result_regr <- rf_cv[[2]] 
-rf_train_time_regr <- rf_cv[[3]]
+a <- rf_cv$all_results
+rf_cv_result_regr <- rf_cv$best_result 
+rf_train_time_regr <- rf_cv$train_time
 ```
 
 ### Train a random forest model

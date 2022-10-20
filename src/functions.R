@@ -110,7 +110,9 @@ create_train_test_split <- function(data, sample_size, ratio, type)
     test_data_regr <- data %>%
       sample_frac(test_size/sdf_nrow(data))
     
-    train_test_split <- list(train_data_regr,test_data_regr)
+    train_test_split <- list(train_data = train_data_regr,
+                             test_data = test_data_regr)
+    class(train_test_split) <- "train_test_split"
   }
   
   if(type == "classification")
@@ -128,7 +130,9 @@ create_train_test_split <- function(data, sample_size, ratio, type)
     
     test_data <- data %>%
       sample_frac(test_size/sdf_nrow(data))
-    train_test_split <- list(train_data,test_data)
+    train_test_split <- list(train_data = train_data,
+                             test_data = test_data)
+    class(train_test_split) <- "train_test_split"
   }
   return(train_test_split)
 }
@@ -177,5 +181,10 @@ cross_validator <- function(sc,
     best_cv_result <- cv_results[which.max(cv_results$r2),"r2"]  
   }
    
-  return(list(cv_results,best_cv_result,train_time))
+  final_cv_results <- list(all_results = cv_results,
+                           best_result = best_cv_result,
+                           train_time = train_time)
+  class(final_cv_results) <- "final_cv_results"
+  
+  return(final_cv_results)
 }
