@@ -16,6 +16,7 @@ output:
 The following libraries are used in this R markdown file.
 
 ```{r setup, message=FALSE}
+markdown_start_time <- Sys.time()
 knitr::opts_chunk$set(echo = TRUE)
 library(data.table)
 library(tidymodels)
@@ -81,29 +82,20 @@ class_delay_pipeline <- .%>% main_pipeline %>%
 Take a sample set of the data to reduce time to train the model.
 
 ```{r, message=FALSE}
-## Splitted datasets for classification
-# Imbalanced training set
-# train_data <- class_delay_pipeline(raw_data) %>%
-#   sample_frac(0.008)
-# Balanced training set using under sampling
-delay_yes <- class_delay_pipeline(raw_data) %>%
-  filter(delay == "1")
-delay_no <- class_delay_pipeline(raw_data) %>%
-  filter(delay == "0")
-tmp1 <- delay_yes %>% 
-  sample_n(22281)
-tmp2 <- delay_no %>% 
-  sample_n(22281)
-train_data <- rbind(tmp1, tmp2)
-
-test_data <- class_delay_pipeline(raw_data) %>%
-  sample_frac(0.002)
-
-## Splitted datasets for numerical prediction
-train_data_regr <- numer_delay_pipeline(raw_data) %>%
-  sample_frac(0.008)
-test_data_regr <- numer_delay_pipeline(raw_data) %>%
-  sample_frac(0.002)
+# Split for classification
+classification_split <- create_train_test_split(data = class_delay_pipeline(raw_data),
+                                      sample_size = 100000,
+                                      ratio = 0.8,
+                                      type = "classification")
+train_data <- classification_split[[1]]
+test_data <- classification_split[[2]]
+# Split for numerical predictions
+numerical_split <- create_train_test_split(data = numer_delay_pipeline(raw_data),
+                                      sample_size = 100000,
+                                      ratio = 0.8,
+                                      type = "numerical")
+train_data_regr <- numerical_split[[1]]
+test_data_regr <- numerical_split[[2]]
 ```
 
 Let's glimpse into the train data for classification.
@@ -577,4 +569,11 @@ colnames(numerical_prediction_results) <- c("model type", "train time", "R2", "M
 numerical_prediction_results %>% 
   kbl() %>%
   kable_minimal()
+markdown_end_time <- Sys.time()
+```
+
+The total time to knit this markdown is:
+
+```{r}
+markdown_end_time - markdown_start_time
 ```

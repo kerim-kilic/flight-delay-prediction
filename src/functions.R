@@ -87,3 +87,42 @@ generate_metrics_classification <- function(model,type,test_data)
   colnames(model_metric_results) <- c("metric_names", "value")
   return(model_metric_results)
 }
+
+create_train_test_split <- function(data, sample_size, ratio, type)
+{
+  ## Splitted datasets for classification
+  # Balanced training set using under sampling
+  train_size <- sample_size * ratio
+  test_size <- sample_size * (1-ratio)
+  
+  if(type == "numerical")
+  {
+    ## Splitted datasets for numerical prediction
+    train_data_regr <- data %>%
+      sample_frac(train_size/sdf_nrow(data))
+    
+    test_data_regr <- data %>%
+      sample_frac(test_size/sdf_nrow(data))
+    
+    train_test_split <- list(train_data_regr,test_data_regr)
+  }
+  
+  if(type == "classification")
+  {
+    delay_yes <- data %>%
+      filter(delay == "1")
+    delay_no <- data %>%
+      filter(delay == "0")
+    
+    tmp1 <- delay_yes %>% 
+      sample_n(train_size/2)
+    tmp2 <- delay_no %>% 
+      sample_n(train_size/2)
+    train_data <- rbind(tmp1, tmp2)
+    
+    test_data <- data %>%
+      sample_frac(test_size/sdf_nrow(data))
+    train_test_split <- list(train_data,test_data)
+  }
+  return(train_test_split)
+}
