@@ -132,24 +132,19 @@ glm_pipeline <- ml_pipeline(sc) %>%
 # Grid
 grid <- list(logistic_regression = list(elastic_net_param = c(0,0.25,0.5,0.75,1), reg_param = c(0,0.25,0.5,0.75,1)))
 
-# Cross validation
-cv <- ml_cross_validator(
-  sc,
-  estimator = glm_pipeline, # use our pipeline to estimate the model
-  estimator_param_maps = grid, # use the params in grid
-  evaluator = ml_multiclass_classification_evaluator(sc,metric_name = "accuracy"), # how to evaluate the CV
-  num_folds = 4, # number of CV folds
-  seed = 2018
-)
+# Cross validate model
+glm_cv <- cross_validator(sc = sc,
+                          data = train_data,
+                          pipeline = glm_pipeline,
+                          grid = grid,
+                          type = "classification",
+                          folds = 4,
+                          seed = 2018)
 
-glm_start_time <- Sys.time()
-cv_model <- ml_fit(cv, train_data)
-glm_end_time <- Sys.time()
-# Measure the time it takes to cross validate glm model
-glm_train_time <- glm_end_time - glm_start_time
-
-a <- cv_model$avg_metrics_df
-glm_cv_result <- a[which.max(a$accuracy),"accuracy"]
+# Get model results
+a <- glm_cv[[1]]
+glm_cv_result <- glm_cv[[2]] 
+glm_train_time <- glm_cv[[3]]
 ```
 
 
@@ -209,23 +204,19 @@ tree_pipeline <- ml_pipeline(sc) %>%
 # Grid
 grid <- list(decision_tree = list(max_depth = c(1,3,5,7,10)))
 
-# Cross validation
-cv <- ml_cross_validator(
-  sc,
-  estimator = tree_pipeline, # use our pipeline to estimate the model
-  estimator_param_maps = grid, # use the params in grid
-  evaluator = ml_multiclass_classification_evaluator(sc,metric_name = "accuracy"), # how to evaluate the CV
-  num_folds = 4, # number of CV folds
-  seed = 2018
-)
+# Cross validate model
+tree_cv <- cross_validator(sc = sc,
+                           data = train_data,
+                           pipeline = tree_pipeline,
+                           grid = grid,
+                           type = "classification",
+                           folds = 4,
+                           seed = 2018)
 
-tree_start_time <- Sys.time()
-cv_model <- ml_fit(cv, train_data)
-tree_end_time <- Sys.time()
-tree_train_time <- tree_end_time - tree_start_time
-
-a <- cv_model$avg_metrics_df
-tree_cv_result <- a[which.max(a$accuracy),"accuracy"]
+# Get model results
+a <- tree_cv[[1]]
+tree_cv_result <- tree_cv[[2]] 
+tree_train_time <- tree_cv[[3]]
 ```
 
 
@@ -284,23 +275,19 @@ rf_pipeline <- ml_pipeline(sc) %>%
 # Grid
 grid <- list(random_forest = list(max_depth = c(1,3,5,7,10), num_trees = c(1,3,5,7,10,25,50)))
 
-# Cross validation
-cv <- ml_cross_validator(
-  sc,
-  estimator = rf_pipeline, # use our pipeline to estimate the model
-  estimator_param_maps = grid, # use the params in grid
-  evaluator = ml_multiclass_classification_evaluator(sc,metric_name = "accuracy"), # how to evaluate the CV
-  num_folds = 4, # number of CV folds
-  seed = 2018
-)
+# Cross validate model
+rf_cv <- cross_validator(sc = sc,
+                         data = train_data,
+                         pipeline = rf_pipeline,
+                         grid = grid,
+                         type = "classification",
+                         folds = 4,
+                         seed = 2018)
 
-rf_start_time <- Sys.time()
-cv_model <- ml_fit(cv, train_data)
-rf_end_time <- Sys.time()
-rf_train_time <- rf_end_time - rf_start_time
-
-a <- cv_model$avg_metrics_df
-rf_cv_result <- a[which.max(a$accuracy),"accuracy"]
+# Get model results
+a <- rf_cv[[1]]
+rf_cv_result <- rf_cv[[2]] 
+rf_train_time <- rf_cv[[3]]
 ```
 
 ### Train a random forest model
@@ -357,29 +344,25 @@ In this section we will build a random forest pipeline and cross-validate and hy
 ```{r}
 # Pipeline
 rf_pipeline_regression <- ml_pipeline(sc) %>%
-  ft_r_formula(delay_time ~ .) %>%
-  ml_random_forest_regressor()
+    ft_r_formula(delay_time ~ .) %>%
+    ml_random_forest_regressor()
 
 # Grid
 grid <- list(random_forest = list(max_depth = c(1,3,5,7,10), num_trees = c(1,3,5,7,10,25,50)))
 
-cv <- ml_cross_validator(
-  sc,
-  estimator = rf_pipeline_regression, # use our pipeline to estimate the model
-  estimator_param_maps = grid, # use the params in grid
-  evaluator = ml_regression_evaluator(sc,metric_name = "r2"), # how to evaluate the CV
-  num_folds = 4, # number of CV folds
-  seed = 2018
- )
+# Cross validate model
+rf_cv <- cross_validator(sc = sc,
+                         data = train_data_regr,
+                         pipeline = rf_pipeline_regression,
+                         grid = grid,
+                         type = "numerical",
+                         folds = 4,
+                         seed = 2018)
 
-rf_start_time_regr <- Sys.time()
-cv_model <- ml_fit(cv, train_data_regr)
-rf_end_time_regr <- Sys.time()
-rf_train_time_regr <- rf_end_time_regr - rf_start_time_regr
-
-a <- cv_model$avg_metrics_df
-
-rf_cv_result_regr <- a[which.max(a$r2),"r2"]
+# Get model results
+a <- rf_cv[[1]]
+rf_cv_result_regr <- rf_cv[[2]] 
+rf_train_time_regr <- rf_cv[[3]]
 ```
 
 ### Train a random forest model

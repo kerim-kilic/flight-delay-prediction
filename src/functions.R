@@ -1,3 +1,8 @@
+### 
+### Author: Kerim Kiliç
+###
+
+### Function to generate and return metrics of machine learning model
 generate_metrics_classification <- function(model,type,test_data)
 {
   # Check if the data is from the test set or train set.
@@ -88,6 +93,7 @@ generate_metrics_classification <- function(model,type,test_data)
   return(model_metric_results)
 }
 
+# Function to create the split of the data into train and test
 create_train_test_split <- function(data, sample_size, ratio, type)
 {
   ## Splitted datasets for classification
@@ -125,4 +131,51 @@ create_train_test_split <- function(data, sample_size, ratio, type)
     train_test_split <- list(train_data,test_data)
   }
   return(train_test_split)
+}
+
+cross_validator <- function(sc, 
+                            data,
+                            pipeline,
+                            grid,
+                            type,
+                            folds,
+                            seed)
+{
+
+  if(type == "numerical") # how to evaluate the CV
+  {
+    evaluator <- ml_regression_evaluator(sc,metric_name = "r2")
+  }
+  if(type == "classification")
+  {
+    evaluator <- ml_multiclass_classification_evaluator(sc,metric_name = "accuracy")
+  }
+  
+  # Cross validation
+  cv <- ml_cross_validator(
+    sc,
+    estimator = pipeline, # use our pipeline to estimate the model
+    estimator_param_maps = grid, # use the params in grid
+    evaluator = evaluator,
+    num_folds = folds, # number of CV folds
+    seed = seed
+  )
+  
+  start_time <- Sys.time()
+  cv_model <- ml_fit(cv, data)
+  end_time <- Sys.time()
+  # Measure the time it takes to cross validate glm model
+  train_time <- end_time - start_time
+  
+  cv_results <- cv_model$avg_metrics_df
+  if(type == "classification")
+  {
+    best_cv_result <- cv_results[which.max(cv_results$accuracy),"accuracy"]  
+  }
+  if(type == "numerical")
+  {
+    best_cv_result <- cv_results[which.max(cv_results$r2),"r2"]  
+  }
+   
+  return(list(cv_results,best_cv_result,train_time))
 }
