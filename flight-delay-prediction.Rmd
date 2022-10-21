@@ -28,19 +28,26 @@ source("src/functions.R")
 # Initialize spark and read in data
 
 ```{r}
-### Uncomment these two lines to install spark, 
-### and optionally to disconnect an existing connection
-# spark_install(version = "3.3.0")
-# spark_disconnect(sc)
+### Check if spark installation exists, if not install correct version
+if(!spark_install_find("3.3.0")$installed)
+{
+  spark_install(version = "3.3.0")
+}
+
 spark_config <- spark_config()
 spark_config$'sparklyr.shell.driver-memory' <- "12G"
 
 sc <- spark_connect(master = "local",
-                    config = spark_config)
+                    config = spark_config,
+                    version = "3.3.0")
 
-### Uncomment these two lines to read in the RDS file of the data of 2017
-# my_data <- readRDS("data/flights_2017.RDS")
-# fwrite(my_data,file = "data/flights_2017.csv")
+### Check if csv of the data file exists, if not create one.
+if(!file.exists("data/flights_2017.csv"))
+{
+  my_data <- readRDS("data/flights_2017.RDS")
+  fwrite(my_data,file = "data/flights_2017.csv")  
+}
+
 raw_data <- spark_read_csv(sc,"data/flights_2017.csv")
 raw_data %>% glimpse()
 ```
@@ -58,22 +65,22 @@ main_pipeline <- .%>%
          delay_time = minute(delay_time) + (hour(delay_time)*60) + (second(delay_time)/60),
          delay = case_when(delay_time > 0 ~ "1",
                            delay_time <= 0 ~ "0")) %>%
-  select(-id,-year,-wheels_on_time,-wheels_off_time,-planned_departure_time,
-         -planned_arrival_time,-actual_departure_time,-actual_arrival_time,
-         -tail_number,-flight_number,-carrier,-origin,-destination,
-         -cancelled_flag,-diverted_flag,-num_flights,
-         -actual_arrival_local_hour, -actual_departure_local_hour)
+  select(quarter,month,day_of_month,day_of_week,hour_of_day,minutes_of_hour,
+         planned_departure_local_hour,planned_arrival_local_hour,
+         # wheels_off_time_local_hour,wheels_on_time_local_hour,
+         flight_distance,seating_capacity,
+         delay,delay_time)
 
 # Create the numerical delay sub-pipeline
 # Sum the individual types of delay to a total delay_time.
 # Remove individual delays
 numer_delay_pipeline <- .%>% main_pipeline %>% 
-  select(-carrier_delay,-weather_delay,-nas_delay,-security_delay,-late_aircraft_delay,-delay)
+  select(-delay)
 
 # Create the classification sub-pipeline
 # Remove the individual delays 
 class_delay_pipeline <- .%>% main_pipeline %>% 
-  select(-carrier_delay,-weather_delay,-nas_delay,-security_delay,-late_aircraft_delay, -delay_time) %>%
+  select(-delay_time) %>%
   group_by(delay)
 ```
 
