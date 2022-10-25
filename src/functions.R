@@ -3,7 +3,7 @@
 ###
 
 ### Function to generate and return metrics of machine learning model
-generate_metrics_classification <- function(model,type,test_data)
+generate_metrics_classification <- function(model,type,test_data, sc)
 {
   # Check if the data is from the test set or train set.
   if(type == "train")
@@ -39,6 +39,29 @@ generate_metrics_classification <- function(model,type,test_data)
     model_pr_auc <- predictions %>%
       ml_metrics_binary(metrics = "pr_auc") %>%
       pull(.estimate)
+  }
+  if(type == "h2o_classification")
+  {
+    predictions <- h2o.predict(model, test_data)
+    predictions <- as.data.frame(predictions)
+    actual_delays <- data.frame(as.data.frame(test_data) %>% pull(delay))
+    colnames(actual_delays) <- c("actual_delay")
+    
+    evaluation_frame <- predictions %>%
+      append(actual_delays)
+  
+    predictions <- evaluation_frame
+    predictions <- data.frame(predictions) %>%
+      select(predict,actual_delay)
+    
+    colnames(predictions) <- c("predicted_label", "delay")
+    
+    predictions <- copy_to(dest = sc,
+                           df = predictions,
+                           overwrite = TRUE)
+    
+    model_roc_auc <- h2o.auc(h2o.performance(model, newdata = test_data))
+    model_pr_auc <- h2o.aucpr(h2o.performance(model, newdata = test_data))
   }
   
   # Calculate the confusion matrix with TP, TN, FP, FN

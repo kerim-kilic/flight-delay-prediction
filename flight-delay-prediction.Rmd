@@ -1090,62 +1090,11 @@ gbm_metrics_train <- gbm_metrics %>%
 colnames(gbm_metrics_train) <- c("metric_names", "GBM_train")
 ```
 
-```{r, echo=FALSE}
-predictions <- as.data.frame(preds) 
-
-actual_delays <- data.frame(as.data.frame(test_data_h2o) %>% pull(delay))
-colnames(actual_delays) <- c("actual_delay")
-
-evaluation_frame <- predictions %>%
-  append(actual_delays)
-
-evaluation_frame <- data.frame(evaluation_frame)
-  # Calculate the confusion matrix with TP, TN, FP, FN
-  
-TP <- nrow(evaluation_frame %>%
-             filter(actual_delay == "1", 
-                    predict == "1"))
-  
-TN <- nrow(evaluation_frame %>%
-             filter(actual_delay == "0", 
-                    predict == "0"))
-  
-FP <- nrow(evaluation_frame %>%
-             filter(actual_delay == "0", 
-                    predict == "1"))
-  
-FN <- nrow(evaluation_frame %>%
-             filter(actual_delay == "1", 
-                    predict == "0"))
-  
-# Calculate each model metric using confusion matrix
-accuracy <- (TP + TN) / (nrow(evaluation_frame))
-recall <- (TP) / (TP + FN)
-precision <- (TP) / (TP + FP)
-missclassification_rate <- (FP + FN) / (nrow(evaluation_frame))
-specificity <- (TN) / (TN + FP)
-f_score <- (2*precision*recall) / (precision+recall)
-
-metric_names <- c("accuracy",
-                  "recall",
-                  "precision",
-                  "missclassification_rate",
-                  "specificity",
-                  "f_score")
-
-model_metrics <- c(
-  accuracy,    
-  recall,    
-  precision,    
-  missclassification_rate,
-  specificity,
-  f_score)
-
-gbm_metrics_test <-
-  data.frame(metric_names, model_metrics) %>%
-  mutate(model_metrics = round(model_metrics,3))
-
-colnames(gbm_metrics_test) <- c("metric_names", "GBM_test")
+```{r, echo=FALSE, message=FALSE, fig.show='hide', results='hide'}
+gbm_metrics_test <- generate_metrics_classification(model = gbm,
+                                                    type = "h2o_classification",
+                                                    test_data = test_data_h2o,
+                                                    sc = sc)
 ```
 
 ```{r, echo=FALSE}
@@ -1170,62 +1119,12 @@ dl_metrics_train <- dl_metrics %>%
 colnames(dl_metrics_train) <- c("metric_names", "DL_train")
 ```
 
-```{r, echo=FALSE}
-predictions <- as.data.frame(preds_dl) 
 
-actual_delays <- data.frame(as.data.frame(test_data_h2o) %>% pull(delay))
-colnames(actual_delays) <- c("actual_delay")
-
-evaluation_frame <- predictions %>%
-  append(actual_delays)
-
-evaluation_frame <- data.frame(evaluation_frame)
-  # Calculate the confusion matrix with TP, TN, FP, FN
-  
-TP <- nrow(evaluation_frame %>%
-             filter(actual_delay == "1", 
-                    predict == "1"))
-  
-TN <- nrow(evaluation_frame %>%
-             filter(actual_delay == "0", 
-                    predict == "0"))
-  
-FP <- nrow(evaluation_frame %>%
-             filter(actual_delay == "0", 
-                    predict == "1"))
-  
-FN <- nrow(evaluation_frame %>%
-             filter(actual_delay == "1", 
-                    predict == "0"))
-  
-# Calculate each model metric using confusion matrix
-accuracy <- (TP + TN) / (nrow(evaluation_frame))
-recall <- (TP) / (TP + FN)
-precision <- (TP) / (TP + FP)
-missclassification_rate <- (FP + FN) / (nrow(evaluation_frame))
-specificity <- (TN) / (TN + FP)
-f_score <- (2*precision*recall) / (precision+recall)
-
-metric_names <- c("accuracy",
-                  "recall",
-                  "precision",
-                  "missclassification_rate",
-                  "specificity",
-                  "f_score")
-
-model_metrics <- c(
-  accuracy,    
-  recall,    
-  precision,    
-  missclassification_rate,
-  specificity,
-  f_score)
-
-dl_metrics_test <-
-  data.frame(metric_names, model_metrics) %>%
-  mutate(model_metrics = round(model_metrics,3))
-
-colnames(dl_metrics_test) <- c("metric_names", "DL_test")
+```{r, echo=FALSE, message=FALSE, fig.show='hide', results='hide'}
+dl_metrics_test <- generate_metrics_classification(model = dl_model,
+                                                    type = "h2o_classification",
+                                                    test_data = test_data_h2o,
+                                                    sc = sc)
 ```
 
 Model metrics on the entire train set for the models trained using the h2o framework:
@@ -1246,9 +1145,11 @@ Model metrics on the test set for the models trained using the h2o framework:
 
 ```{r, echo=FALSE}
 final_summary_test <- gbm_metrics_test %>%
-  append(data.frame(dl_metrics_test$DL_test))
+  append(data.frame(dl_metrics_test$value))
+
 
 final_summary_test <- data.frame(final_summary_test)
+
 colnames(final_summary_test) <- c("metric_names", "GBM_test", "DL_test")
 
 final_summary_test %>% 
