@@ -23,9 +23,14 @@ library(tidymodels)
 library(sparklyr)
 library(kableExtra)
 source("src/functions.R")
+
+library(h2o)
+library(rsparkling)
 ```
 
-# Initialize spark and read in data
+# Initialize spark and h2o 
+
+## Initialize spark and read in flights data
 
 ```{r}
 ### Check if spark installation exists, if not install correct version
@@ -50,6 +55,13 @@ if(!file.exists("data/flights_2017.csv"))
 
 raw_data <- spark_read_csv(sc,"data/flights_2017.csv")
 raw_data %>% glimpse()
+```
+
+## Initialize h2o 
+
+```{r, message=FALSE, fig.show='hide', results='hide'}
+h2oConf <- rsparkling::H2OConf()
+hc <- H2OContext.getOrCreate(h2oConf)
 ```
 
 # Create datacleaning pipeline
@@ -86,6 +98,8 @@ class_delay_pipeline <- .%>% main_pipeline %>%
 
 # Splitting data in train and test sets
 
+## Creating the train and test sets for spark
+
 Take a sample set of the data to reduce time to train the model.
 
 ```{r, message=FALSE}
@@ -103,8 +117,6 @@ numerical_split <- create_train_test_split(data = numer_delay_pipeline(raw_data)
                                       type = "numerical")
 train_data_regr <- numerical_split$train_data
 test_data_regr <- numerical_split$test_data
-
-rm(raw_data)
 ```
 
 Let's glimpse into the train data for classification.
@@ -119,6 +131,53 @@ Let's glimpse into the train data for numerical prediction.
 train_data_regr %>% glimpse()
 ```
 
+## Creating the train, validation, and test sets for h2o
+
+Create the train, validation, test, split to use with the h2o framework.
+
+```{r, message=FALSE}
+tmp <- class_delay_pipeline(raw_data)
+
+sub_sample <- 100000
+
+delay_yes <- tmp %>%
+  filter(delay == "1")
+delay_no <- tmp %>%
+  filter(delay == "0")
+    
+tmp1 <- delay_yes %>% 
+      sample_n(sub_sample/2)
+tmp2 <- delay_no %>% 
+  sample_n(sub_sample/2)
+
+sample_data_classification <- rbind(tmp1, tmp2)
+sample_data_classification <- hc$asH2OFrame(sample_data_classification)
+sample_data_numerical <- tmp %>%
+  sample_n(100000)
+sample_data_numerical <- hc$asH2OFrame(sample_data_numerical)
+    
+### Train, validation, test split using h2o framework with classification
+splits <- h2o.splitFrame(
+  data = sample_data_classification,
+  ratios = c(0.6,0.2),   ## only need to specify 2 fractions, the 3rd is implied
+  destination_frames = c("train1.hex", "valid1.hex", "test1.hex"), seed = 1234
+)
+train_data_h2o <- splits[[1]]
+valid_data_h2o <- splits[[2]]
+test_data_h2o  <- splits[[3]]
+
+### Train, validation, test split using h2o framework with numerical prediction
+splits <- h2o.splitFrame(
+  data = sample_data_numerical,
+  ratios = c(0.6,0.2),   ## only need to specify 2 fractions, the 3rd is implied
+  destination_frames = c("train2.hex", "valid2.hex", "test2.hex"), seed = 1234
+)
+train_data_regr_h2o <- splits[[1]]
+valid_data_h2o_h2o <- splits[[2]]
+test_data_regr_h2o  <- splits[[3]]
+
+rm(raw_data)
+```
 
 # Classification of flight delays
 
@@ -160,7 +219,6 @@ a[order(-a$accuracy),] %>%
   kbl() %>%
   kable_minimal()
 ```
-
 
 ### Train a tuned logistic regression model
 
@@ -237,7 +295,6 @@ a[order(-a$accuracy),] %>%
   kbl() %>%
   kable_minimal()
 ```
-
 
 ### Train a decision tree model
 
@@ -353,6 +410,307 @@ rf_tuned_result <- generate_metrics_classification(rf_model,
 rf_tuned_result %>% 
   kbl() %>%
   kable_minimal()
+```
+
+## Training a gradient boosting machine with h2o
+
+In this section we will train a gradient boosted machine model using the h2o framework. 
+
+<!-- Check this link for the tutorial for hyper parameter tuning a GBM model: -->
+<!-- https://h2o.ai/blog/h2o-gbm-tuning-tutorial-for-r/ -->
+
+### Baseline performance
+
+Let's train a baseline GBM model using the train data set.
+
+```{r, message=FALSE, fig.show='hide', results='hide'}
+# Establish baseline performance
+y <- "delay"
+x <- setdiff(names(train_data_h2o), y)
+
+gbm <- h2o.gbm(x = x, y = y, training_frame = train_data_h2o)
+```
+
+Let's take a look at the baseline AUC using the validation data set.
+
+```{r}
+h2o.auc(h2o.performance(gbm, newdata = valid_data_h2o))
+```
+
+
+baseline performance with 4-fold cross validation.
+
+```{r, message=FALSE, fig.show='hide', results='hide'}
+gbm_cv <- h2o.gbm(x=x,
+                  y=y,
+                  training_frame = h2o.rbind(train_data_h2o, valid_data_h2o),
+                  nfolds = 4,
+                  seed = 2018)
+```
+
+Let's take a look at the baseline AUC with cross validation using both the train and validation data set.
+
+```{r}
+h2o.auc(h2o.performance(gbm_cv, xval = TRUE))
+```
+
+Training a GBM with arbitrarily picked parameters.
+
+```{r, message=FALSE, fig.show='hide', results='hide'}
+gbm <- h2o.gbm(
+  ## standard model parameters
+  x = x,
+  y = y,
+  training_frame = train_data_h2o,
+  validation_frame = valid_data_h2o,
+  ## more trees is better if the learning rate is small enough
+  ## here, use "more than enough" trees - we have early stopping
+  ntrees = 10000,
+  ## smaller learning rate is better (this is a good value for most datasets, but see below for annealing)
+  learn_rate=0.01,
+  ## early stopping once the validation AUC doesn't improve by at least 0.01% for 5 consecutive scoring events
+  stopping_rounds = 5, stopping_tolerance = 1e-4, stopping_metric = "AUC",
+  ## sample 80% of rows per tree
+  sample_rate = 0.8,
+  ## sample 80% of columns per split
+  col_sample_rate = 0.8,
+  ## fix a random number generator seed for reproducibility
+  seed = 2018,
+  ## score every 10 trees to make early stopping reproducible (it depends on the scoring interval)
+  score_tree_interval = 10
+)
+```
+
+Get the AUC on the validation data set using some arbitrarily picked parameters.
+
+```{r}
+## Get the AUC on the validation set
+h2o.auc(h2o.performance(gbm))
+```
+
+### Hyper-parameter tuning the GBM model
+
+Perform hyper-parameter tuning to figure out the best value for depth.
+
+```{r, message=FALSE, fig.show='hide', results='hide'}
+## Depth 10 is usually plenty of depth for most datasets, but you never know
+hyper_params = list( max_depth = seq(1,29,2) )
+#hyper_params = list( max_depth = c(4,6,8,12,16,20) ) ##faster for larger datasets
+grid <- h2o.grid(
+  ## hyper parameters
+  hyper_params = hyper_params,
+  ## full Cartesian hyper-parameter search
+  search_criteria = list(strategy = "Cartesian"),
+  ## which algorithm to run
+  algorithm="gbm",
+  ## identifier for the grid, to later retrieve it
+  grid_id="depth_grid",
+  ## standard model parameters
+  x = x,
+  y = y,
+  training_frame = train_data_h2o,
+  validation_frame = valid_data_h2o,
+  ## more trees is better if the learning rate is small enough
+  ## here, use "more than enough" trees - we have early stopping
+  ntrees = 10000,
+  ## smaller learning rate is better
+  ## since we have learning_rate_annealing, we can afford to start with a bigger learning rate
+  learn_rate = 0.05,
+  ## learning rate annealing: learning_rate shrinks by 1% after every tree
+  ## (use 1.00 to disable, but then lower the learning_rate)
+  learn_rate_annealing = 0.99,
+  ## sample 80% of rows per tree
+  sample_rate = 0.8,
+  ## sample 80% of columns per split
+  col_sample_rate = 0.8,
+  ## fix a random number generator seed for reproducibility
+  seed = 1234,
+  ## early stopping once the validation AUC doesn't improve by at least 0.01% for 5 consecutive scoring events
+  stopping_rounds = 5,
+  stopping_tolerance = 1e-4,
+  stopping_metric = "AUC",
+  ## score every 10 trees to make early stopping reproducible (it depends on the scoring interval)
+  score_tree_interval = 10
+)
+```
+
+```{r}
+## by default, display the grid search results sorted by increasing logloss (since this is a classification task)
+grid
+```
+
+```{r}
+## sort the grid models by decreasing AUC
+sortedGrid <- h2o.getGrid("depth_grid", sort_by="auc", decreasing = TRUE)
+sortedGrid
+```
+
+```{r}
+## find the range of max_depth for the top 5 models
+topDepths = sortedGrid@summary_table$max_depth[1:5]
+minDepth = min(as.numeric(topDepths))
+maxDepth = max(as.numeric(topDepths))
+```
+
+Hyper parameter tune the remaining parameters using random search.
+
+```{r, message=FALSE, fig.show='hide', results='hide'}
+hyper_params = list(
+  ## restrict the search to the range of max_depth established above
+  max_depth = seq(minDepth,maxDepth,1),
+  ## search a large space of row sampling rates per tree
+  sample_rate = seq(0.2,1,0.01),
+  ## search a large space of column sampling rates per split
+  col_sample_rate = seq(0.2,1,0.01),
+  ## search a large space of column sampling rates per tree
+  col_sample_rate_per_tree = seq(0.2,1,0.01),
+  ## search a large space of how column sampling per split should change as a function of the depth of the split
+  col_sample_rate_change_per_level = seq(0.9,1.1,0.01),
+  ## search a large space of the number of min rows in a terminal node
+  min_rows = 2^seq(0,log2(nrow(train_data_h2o))-1,1),
+  ## search a large space of the number of bins for split-finding for continuous and integer columns
+  nbins = 2^seq(4,10,1),
+  ## search a large space of the number of bins for split-finding for categorical columns
+  nbins_cats = 2^seq(4,12,1),
+  ## search a few minimum required relative error improvement thresholds for a split to happen
+  min_split_improvement = c(0,1e-8,1e-6,1e-4),
+  ## try all histogram types (QuantilesGlobal and RoundRobin are good for numeric columns with outliers)
+  histogram_type = c("UniformAdaptive","QuantilesGlobal","RoundRobin")
+)
+search_criteria = list(
+  ## Random grid search
+  strategy = "RandomDiscrete",
+  ## limit the runtime to 60 minutes
+  max_runtime_secs = 3600,
+  ## build no more than 100 models
+  max_models = 100,
+  ## random number generator seed to make sampling of parameter combinations reproducible
+  seed = 1234,
+  ## early stopping once the leaderboard of the top 5 models is converged to 0.1% relative difference
+  stopping_rounds = 5,
+  stopping_metric = "AUC",
+  stopping_tolerance = 1e-3
+)
+grid <- h2o.grid(
+  ## hyper parameters
+  hyper_params = hyper_params,
+  ## hyper-parameter search configuration (see above)
+  search_criteria = search_criteria,
+  ## which algorithm to run
+  algorithm = "gbm",
+  ## identifier for the grid, to later retrieve it
+  grid_id = "final_grid",
+  ## standard model parameters
+  x = x,
+  y = y,
+  training_frame = train_data_h2o,
+  validation_frame = valid_data_h2o,
+  ## more trees is better if the learning rate is small enough
+  ## use "more than enough" trees - we have early stopping
+  ntrees = 10000,
+  ## smaller learning rate is better
+  ## since we have learning_rate_annealing, we can afford to start with a bigger learning rate
+  learn_rate = 0.05,
+  ## learning rate annealing: learning_rate shrinks by 1% after every tree
+  ## (use 1.00 to disable, but then lower the learning_rate)
+  learn_rate_annealing = 0.99,
+  ## early stopping based on timeout (no model should take more than 1 hour - modify as needed)
+  max_runtime_secs = 3600,
+  ## early stopping once the validation AUC doesn't improve by at least 0.01% for 5 consecutive scoring events
+  stopping_rounds = 5, stopping_tolerance = 1e-4, stopping_metric = "AUC",
+  ## score every 10 trees to make early stopping reproducible (it depends on the scoring interval)
+  score_tree_interval = 10,
+  ## base random number generator seed for each model (automatically gets incremented internally for each model)
+  seed = 1234
+)
+```
+
+```{r}
+## Sort the grid models by AUC
+sortedGrid <- h2o.getGrid("final_grid", sort_by = "auc", decreasing = TRUE)
+sortedGrid
+```
+
+Inspection of the best model of the grid search:
+
+```{r}
+gbm <- h2o.getModel(sortedGrid@model_ids[[1]])
+print(h2o.auc(h2o.performance(gbm, newdata = test_data_h2o)))
+```
+
+Check the parameters of the winning model.
+
+```{r}
+gbm@parameters
+```
+
+### Train the tuned model using the whole training set
+
+Build a model on the whole training set:
+
+```{r, message=FALSE, fig.show='hide', results='hide'}
+model <- do.call(h2o.gbm,
+        ## update parameters in place
+        {
+          p <- gbm@parameters
+          p$model_id = NULL          ## do not overwrite the original grid model
+          p$training_frame = h2o.rbind(train_data_h2o, valid_data_h2o)      ## use the full dataset
+          p$validation_frame = NULL  ## no validation frame
+          p$nfolds = 4               ## cross-validation
+          p
+        }
+)
+```
+
+```{r}
+model@model$cross_validation_metrics_summary
+```
+
+<!-- You can use the following code to check the variance: -->
+<!-- Commenting out since it does not show much effect. -->
+
+<!-- ```{r} -->
+<!-- for (i in 1:5) { -->
+<!--   gbm <- h2o.getModel(sortedGrid@model_ids[[i]]) -->
+<!--   cvgbm <- do.call(h2o.gbm, -->
+<!--         ## update parameters in place -->
+<!--         { -->
+<!--           p <- gbm@parameters -->
+<!--           p$model_id = NULL          ## do not overwrite the original grid model -->
+<!--           p$training_frame = h2o.rbind(train_data_h2o, valid_data_h2o)      ## use the full dataset -->
+<!--           p$validation_frame = NULL  ## no validation frame -->
+<!--           p$nfolds = 5               ## cross-validation -->
+<!--           p -->
+<!--         } -->
+<!--   ) -->
+<!--   print(gbm@model_id) -->
+<!--   print(cvgbm@model$cross_validation_metrics_summary[5,]) ## Pick out the "AUC" row -->
+<!-- } -->
+<!-- ``` -->
+
+Make predictions on the test set:
+
+```{r, message=FALSE, fig.show='hide', results='hide'}
+gbm <- h2o.getModel(sortedGrid@model_ids[[1]])
+preds <- h2o.predict(gbm, test_data_h2o)
+```
+
+Show some of the predictions:
+
+```{r}
+head(preds)
+```
+
+Show the metrics of the model with the thresholds
+
+```{r}
+gbm@model$validation_metrics@metrics$max_criteria_and_metric_scores
+```
+
+Save the model:
+
+```{r, message=FALSE, fig.show='hide', results='hide'}
+h2o.saveModel(gbm, "models/h2o/gbm_classification.csv", force=TRUE)
 ```
 
 # Numerical prediction of the delay time
@@ -473,6 +831,8 @@ numerical_prediction_results %>%
 
 ### Classification
 
+#### Models build using spark
+
 Summary of model metrics on the train set
 
 ```{r, echo=FALSE}
@@ -548,6 +908,99 @@ classification_results_train %>%
   kbl() %>%
   kable_minimal()
 ```
+
+#### Models build using h2o
+
+Metrics on the final model using the full train set:
+
+```{r}
+gbm_metrics <- model@model$cross_validation_metrics_summary[c(1,2,6,15,16,18,20),]
+
+metric_names <- c("accuracy",
+                  "auc", 
+                  "f1",
+                  "pr_auc",
+                  "precision",
+                  "recall",
+                  "specificity")
+metric_names <- data.frame(metric_names)
+
+gbm_metrics <- gbm_metrics %>% append(metric_names)
+gbm_metrics <- data.frame(gbm_metrics)
+
+gbm_metrics <- gbm_metrics %>%
+  select(metric_names, mean) %>%
+  mutate(mean = round(mean,3))
+
+gbm_metrics %>%
+  kbl() %>%
+  kable_minimal()
+```
+
+Metrics on using the model on the predicting with the test set:
+
+```{r}
+predictions <- as.data.frame(preds) 
+
+actual_delays <- data.frame(as.data.frame(test_data_h2o) %>% pull(delay))
+colnames(actual_delays) <- c("actual_delay")
+
+evaluation_frame <- predictions %>%
+  append(actual_delays)
+
+evaluation_frame <- data.frame(evaluation_frame)
+  # Calculate the confusion matrix with TP, TN, FP, FN
+  
+TP <- nrow(evaluation_frame %>%
+             filter(actual_delay == "1", 
+                    predict == "1"))
+  
+TN <- nrow(evaluation_frame %>%
+             filter(actual_delay == "0", 
+                    predict == "0"))
+  
+FP <- nrow(evaluation_frame %>%
+             filter(actual_delay == "0", 
+                    predict == "1"))
+  
+FN <- nrow(evaluation_frame %>%
+             filter(actual_delay == "1", 
+                    predict == "0"))
+  
+# Calculate each model metric using confusion matrix
+accuracy <- (TP + TN) / (nrow(evaluation_frame))
+recall <- (TP) / (TP + FN)
+precision <- (TP) / (TP + FP)
+missclassification_rate <- (FP + FN) / (nrow(evaluation_frame))
+specificity <- (TN) / (TN + FP)
+f_score <- (2*precision*recall) / (precision+recall)
+
+metric_names <- c("accuracy",
+                  "recall",
+                  "precision",
+                  "missclassification_rate",
+                  "specificity",
+                  "f_score")
+
+model_metrics <- c(
+  accuracy,    
+  recall,    
+  precision,    
+  missclassification_rate,
+  specificity,
+  f_score)
+
+model_metric_results <-
+  data.frame(metric_names, model_metrics) %>%
+  mutate(model_metrics = round(model_metrics,3))
+
+colnames(model_metric_results) <- c("metric_names", "value_train")
+
+model_metric_results %>% 
+  kbl() %>%
+  kable_minimal()
+```
+
 
 ### Numerical prediction
 
