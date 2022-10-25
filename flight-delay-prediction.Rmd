@@ -823,7 +823,6 @@ grid <- h2o.grid(
   max_w2=10,                      ## can help improve stability for Rectifier
   hyper_params=hyper_params
 )
-# grid
 ```
 
 ```{r}
@@ -1069,9 +1068,7 @@ classification_results_train %>%
 
 #### Models build using h2o
 
-Metrics on the final GBM model using the full train set:
-
-```{r}
+```{r, echo=FALSE}
 gbm_metrics <- model@model$cross_validation_metrics_summary[c(1,2,6,15,16,18,20),]
 
 metric_names <- c("accuracy",
@@ -1086,21 +1083,14 @@ metric_names <- data.frame(metric_names)
 gbm_metrics <- gbm_metrics %>% append(metric_names)
 gbm_metrics <- data.frame(gbm_metrics)
 
-gbm_metrics <- gbm_metrics %>%
+gbm_metrics_train <- gbm_metrics %>%
   select(metric_names, mean) %>%
   mutate(mean = round(mean,3))
 
-colnames(model_metric_results) <- c("metric_names", "value_train")
-
-gbm_metrics %>%
-  kbl() %>%
-  kable_minimal()
-
+colnames(gbm_metrics_train) <- c("metric_names", "GBM_train")
 ```
 
-Metrics on using the final GBM model on the predicting with the test set:
-
-```{r}
+```{r, echo=FALSE}
 predictions <- as.data.frame(preds) 
 
 actual_delays <- data.frame(as.data.frame(test_data_h2o) %>% pull(delay))
@@ -1151,20 +1141,14 @@ model_metrics <- c(
   specificity,
   f_score)
 
-model_metric_results <-
+gbm_metrics_test <-
   data.frame(metric_names, model_metrics) %>%
   mutate(model_metrics = round(model_metrics,3))
 
-colnames(model_metric_results) <- c("metric_names", "value_test")
-
-model_metric_results %>% 
-  kbl() %>%
-  kable_minimal()
+colnames(gbm_metrics_test) <- c("metric_names", "GBM_test")
 ```
 
-Metrics on the final deep learning model using the full train set:
-
-```{r}
+```{r, echo=FALSE}
 dl_metrics <- final_dl_model@model$cross_validation_metrics_summary[c(1,2,6,15,16,18,20),]
 
 metric_names <- c("accuracy",
@@ -1179,21 +1163,14 @@ metric_names <- data.frame(metric_names)
 dl_metrics <- dl_metrics %>% append(metric_names)
 dl_metrics <- data.frame(dl_metrics)
 
-dl_metrics <- dl_metrics %>%
+dl_metrics_train <- dl_metrics %>%
   select(metric_names, mean) %>%
   mutate(mean = round(mean,3))
 
-colnames(dl_metrics) <- c("metric_names", "value_train")
-
-dl_metrics %>%
-  kbl() %>%
-  kable_minimal()
-
+colnames(dl_metrics_train) <- c("metric_names", "DL_train")
 ```
 
-Metrics on using the final deep learning model on the predicting with the test set:
-
-```{r}
+```{r, echo=FALSE}
 predictions <- as.data.frame(preds_dl) 
 
 actual_delays <- data.frame(as.data.frame(test_data_h2o) %>% pull(delay))
@@ -1244,13 +1221,37 @@ model_metrics <- c(
   specificity,
   f_score)
 
-model_metric_results <-
+dl_metrics_test <-
   data.frame(metric_names, model_metrics) %>%
   mutate(model_metrics = round(model_metrics,3))
 
-colnames(model_metric_results) <- c("metric_names", "value_test")
+colnames(dl_metrics_test) <- c("metric_names", "DL_test")
+```
 
-model_metric_results %>% 
+Model metrics on the entire train set for the models trained using the h2o framework:
+
+```{r, echo=FALSE}
+final_summary_train <- gbm_metrics_train %>%
+  append(data.frame(dl_metrics_train$DL_train))
+
+final_summary_train <- data.frame(final_summary_train)
+colnames(final_summary_train) <- c("metric_names", "GBM_train", "DL_train")
+
+final_summary_train %>% 
+  kbl() %>%
+  kable_minimal()
+```
+
+Model metrics on the test set for the models trained using the h2o framework:
+
+```{r, echo=FALSE}
+final_summary_test <- gbm_metrics_test %>%
+  append(data.frame(dl_metrics_test$DL_test))
+
+final_summary_test <- data.frame(final_summary_test)
+colnames(final_summary_test) <- c("metric_names", "GBM_test", "DL_test")
+
+final_summary_test %>% 
   kbl() %>%
   kable_minimal()
 ```
