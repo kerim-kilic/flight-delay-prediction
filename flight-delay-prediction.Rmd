@@ -23,7 +23,6 @@ library(tidymodels)
 library(sparklyr)
 library(kableExtra)
 source("src/functions.R")
-
 library(h2o)
 library(rsparkling)
 ```
@@ -173,7 +172,7 @@ splits <- h2o.splitFrame(
   destination_frames = c("train2.hex", "valid2.hex", "test2.hex"), seed = 1234
 )
 train_data_regr_h2o <- splits[[1]]
-valid_data_h2o_h2o <- splits[[2]]
+valid_data_regr_h2o <- splits[[2]]
 test_data_regr_h2o  <- splits[[3]]
 
 rm(raw_data)
@@ -713,6 +712,165 @@ Save the model:
 h2o.saveModel(gbm, "models/h2o/gbm_classification.csv", force=TRUE)
 ```
 
+## Train a deep learning model using the h2o framework
+
+### Baseline performance
+
+Establish baseline performance
+
+```{r, message=FALSE, fig.show='hide', results='hide'}
+dl_model <- h2o.deeplearning(
+  model_id = "dl_model1", 
+  training_frame = train_data_h2o, 
+  validation_frame = valid_data_h2o,   ## validation dataset: used for scoring and early stopping
+  x = x,
+  y = y,
+  #activation="Rectifier",  ## default
+  #hidden=c(200,200),       ## default: 2 hidden layers with 200 neurons each
+  epochs = 1,
+  variable_importances = T    ## not enabled by default
+)
+# summary(dl_model)
+```
+
+Let's take a look at variable importance
+
+```{r}
+head(as.data.frame(h2o.varimp(dl_model))) %>%
+  kbl() %>%
+  kable_minimal()
+```
+
+Implement early stopping to the model
+
+```{r, message=FALSE, fig.show='hide', results='hide'}
+m2 <- h2o.deeplearning(
+  model_id="dl_model_faster", 
+  training_frame=train_data_h2o, 
+  validation_frame=valid_data_h2o,
+  x=x,
+  y=y,
+  hidden=c(32,32,32),                  ## small network, runs faster
+  epochs=1000000,                      ## hopefully converges earlier...
+  score_validation_samples=10000,      ## sample the validation dataset (faster)
+  stopping_rounds=2,
+  stopping_metric="misclassification", ## could be "MSE","logloss","r2"
+  stopping_tolerance=0.01
+)
+# summary(m2)
+# plot(m2)
+```
+
+### Hyper parameter tuning the deep learning model
+
+Tuning the deep learning model
+
+```{r, message=FALSE, fig.show='hide', results='hide'}
+m3 <- h2o.deeplearning(
+  model_id="dl_model_tuned", 
+  training_frame=train_data_h2o, 
+  validation_frame=valid_data_h2o, 
+  x=x, 
+  y=y, 
+  overwrite_with_best_model=F,    ## Return the final model after 10 epochs, even if not the best
+  hidden=c(128,128,128),          ## more hidden layers -> more complex interactions
+  epochs=10,                      ## to keep it short enough
+  score_validation_samples=10000, ## downsample validation set for faster scoring
+  score_duty_cycle=0.025,         ## don't score more than 2.5% of the wall time
+  adaptive_rate=F,                ## manually tuned learning rate
+  rate=0.01, 
+  rate_annealing=2e-6,            
+  momentum_start=0.2,             ## manually tuned momentum
+  momentum_stable=0.4, 
+  momentum_ramp=1e7, 
+  l1=1e-5,                        ## add some L1/L2 regularization
+  l2=1e-5,
+  max_w2=10                       ## helps stability for Rectifier
+) 
+summary(m3)
+```
+
+Hyper parameter tuning with grid search
+
+```{r, message=FALSE, fig.show='hide', results='hide'}
+hyper_params <- list(
+  hidden=list(c(32,32,32),c(64,64)),
+  input_dropout_ratio=c(0,0.05),
+  rate=c(0.01,0.02),
+  rate_annealing=c(1e-8,1e-7,1e-6)
+)
+hyper_params
+grid <- h2o.grid(
+  algorithm="deeplearning",
+  grid_id="dl_grid", 
+  training_frame=train_data_h2o,
+  validation_frame=valid_data_h2o, 
+  x=x, 
+  y=y,
+  epochs=10,
+  stopping_metric="misclassification",
+  stopping_tolerance=1e-2,        ## stop when misclassification does not improve by >=1% for 2 scoring events
+  stopping_rounds=2,
+  score_validation_samples=10000, ## downsample validation set for faster scoring
+  score_duty_cycle=0.025,         ## don't score more than 2.5% of the wall time
+  adaptive_rate=F,                ## manually tuned learning rate
+  momentum_start=0.5,             ## manually tuned momentum
+  momentum_stable=0.9, 
+  momentum_ramp=1e7, 
+  l1=1e-5,
+  l2=1e-5,
+  activation=c("Rectifier"),
+  max_w2=10,                      ## can help improve stability for Rectifier
+  hyper_params=hyper_params
+)
+# grid
+```
+
+```{r}
+## Sort the grid models by AUC
+sortedGrid <- h2o.getGrid("dl_grid", sort_by = "auc", decreasing = TRUE)
+sortedGrid
+```
+
+```{r, message=FALSE, fig.show='hide', results='hide'}
+best_model <- h2o.getModel(grid@model_ids[[1]])
+```
+
+### Train a tuned deep learning model using the entire training set
+
+Build a model on the whole training set:
+
+```{r, message=FALSE, fig.show='hide', results='hide'}
+final_dl_model <- do.call(h2o.deeplearning,
+        ## update parameters in place
+        {
+          p <- best_model@parameters
+          p$model_id = NULL          ## do not overwrite the original grid model
+          p$training_frame = h2o.rbind(train_data_h2o, valid_data_h2o)      ## use the full dataset
+          p$validation_frame = NULL  ## no validation frame
+          p$nfolds = 4               ## cross-validation
+          p
+        }
+)
+```
+
+```{r}
+final_dl_model@model$cross_validation_metrics_summary
+```
+
+Make predictions on the test set:
+
+```{r, message=FALSE, fig.show='hide', results='hide'}
+dl_model <- h2o.getModel(sortedGrid@model_ids[[1]])
+preds_dl <- h2o.predict(dl_model, test_data_h2o)
+```
+
+Save the model:
+
+```{r, message=FALSE, fig.show='hide', results='hide'}
+h2o.saveModel(dl_model, "models/h2o/dl_classification.csv", force=TRUE)
+```
+
 # Numerical prediction of the delay time
 
 In this section we will build and evaluate different machine learning models to predict the amount of delay an inbound flight of the United States will have.
@@ -911,7 +1069,7 @@ classification_results_train %>%
 
 #### Models build using h2o
 
-Metrics on the final model using the full train set:
+Metrics on the final GBM model using the full train set:
 
 ```{r}
 gbm_metrics <- model@model$cross_validation_metrics_summary[c(1,2,6,15,16,18,20),]
@@ -932,12 +1090,15 @@ gbm_metrics <- gbm_metrics %>%
   select(metric_names, mean) %>%
   mutate(mean = round(mean,3))
 
+colnames(model_metric_results) <- c("metric_names", "value_train")
+
 gbm_metrics %>%
   kbl() %>%
   kable_minimal()
+
 ```
 
-Metrics on using the model on the predicting with the test set:
+Metrics on using the final GBM model on the predicting with the test set:
 
 ```{r}
 predictions <- as.data.frame(preds) 
@@ -994,13 +1155,105 @@ model_metric_results <-
   data.frame(metric_names, model_metrics) %>%
   mutate(model_metrics = round(model_metrics,3))
 
-colnames(model_metric_results) <- c("metric_names", "value_train")
+colnames(model_metric_results) <- c("metric_names", "value_test")
 
 model_metric_results %>% 
   kbl() %>%
   kable_minimal()
 ```
 
+Metrics on the final deep learning model using the full train set:
+
+```{r}
+dl_metrics <- final_dl_model@model$cross_validation_metrics_summary[c(1,2,6,15,16,18,20),]
+
+metric_names <- c("accuracy",
+                  "auc", 
+                  "f1",
+                  "pr_auc",
+                  "precision",
+                  "recall",
+                  "specificity")
+metric_names <- data.frame(metric_names)
+
+dl_metrics <- dl_metrics %>% append(metric_names)
+dl_metrics <- data.frame(dl_metrics)
+
+dl_metrics <- dl_metrics %>%
+  select(metric_names, mean) %>%
+  mutate(mean = round(mean,3))
+
+colnames(dl_metrics) <- c("metric_names", "value_train")
+
+dl_metrics %>%
+  kbl() %>%
+  kable_minimal()
+
+```
+
+Metrics on using the final deep learning model on the predicting with the test set:
+
+```{r}
+predictions <- as.data.frame(preds_dl) 
+
+actual_delays <- data.frame(as.data.frame(test_data_h2o) %>% pull(delay))
+colnames(actual_delays) <- c("actual_delay")
+
+evaluation_frame <- predictions %>%
+  append(actual_delays)
+
+evaluation_frame <- data.frame(evaluation_frame)
+  # Calculate the confusion matrix with TP, TN, FP, FN
+  
+TP <- nrow(evaluation_frame %>%
+             filter(actual_delay == "1", 
+                    predict == "1"))
+  
+TN <- nrow(evaluation_frame %>%
+             filter(actual_delay == "0", 
+                    predict == "0"))
+  
+FP <- nrow(evaluation_frame %>%
+             filter(actual_delay == "0", 
+                    predict == "1"))
+  
+FN <- nrow(evaluation_frame %>%
+             filter(actual_delay == "1", 
+                    predict == "0"))
+  
+# Calculate each model metric using confusion matrix
+accuracy <- (TP + TN) / (nrow(evaluation_frame))
+recall <- (TP) / (TP + FN)
+precision <- (TP) / (TP + FP)
+missclassification_rate <- (FP + FN) / (nrow(evaluation_frame))
+specificity <- (TN) / (TN + FP)
+f_score <- (2*precision*recall) / (precision+recall)
+
+metric_names <- c("accuracy",
+                  "recall",
+                  "precision",
+                  "missclassification_rate",
+                  "specificity",
+                  "f_score")
+
+model_metrics <- c(
+  accuracy,    
+  recall,    
+  precision,    
+  missclassification_rate,
+  specificity,
+  f_score)
+
+model_metric_results <-
+  data.frame(metric_names, model_metrics) %>%
+  mutate(model_metrics = round(model_metrics,3))
+
+colnames(model_metric_results) <- c("metric_names", "value_test")
+
+model_metric_results %>% 
+  kbl() %>%
+  kable_minimal()
+```
 
 ### Numerical prediction
 
