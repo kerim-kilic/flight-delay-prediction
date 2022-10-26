@@ -648,7 +648,7 @@ gbm@parameters
 Build a model on the whole training set:
 
 ```{r, message=FALSE, fig.show='hide', results='hide'}
-model <- do.call(h2o.gbm,
+final_gbm_model <- do.call(h2o.gbm,
         ## update parameters in place
         {
           p <- gbm@parameters
@@ -662,7 +662,7 @@ model <- do.call(h2o.gbm,
 ```
 
 ```{r}
-model@model$cross_validation_metrics_summary
+final_gbm_model@model$cross_validation_metrics_summary
 ```
 
 <!-- You can use the following code to check the variance: -->
@@ -1068,61 +1068,29 @@ classification_results_train %>%
 
 #### Models build using h2o
 
-```{r, echo=FALSE}
-gbm_metrics <- model@model$cross_validation_metrics_summary[c(1,2,6,15,16,18,20),]
-
-metric_names <- c("accuracy",
-                  "auc", 
-                  "f1",
-                  "pr_auc",
-                  "precision",
-                  "recall",
-                  "specificity")
-metric_names <- data.frame(metric_names)
-
-gbm_metrics <- gbm_metrics %>% append(metric_names)
-gbm_metrics <- data.frame(gbm_metrics)
-
-gbm_metrics_train <- gbm_metrics %>%
-  select(metric_names, mean) %>%
-  mutate(mean = round(mean,3))
-
+```{r, echo=FALSE, message=FALSE, fig.show='hide', results='hide'}
+gbm_metrics_train <- generate_metrics_classification(model = final_gbm_model,
+                                                    type = "h2o_classification_train")
 colnames(gbm_metrics_train) <- c("metric_names", "GBM_train")
 ```
 
 ```{r, echo=FALSE, message=FALSE, fig.show='hide', results='hide'}
 gbm_metrics_test <- generate_metrics_classification(model = gbm,
-                                                    type = "h2o_classification",
+                                                    type = "h2o_classification_test",
                                                     test_data = test_data_h2o,
                                                     sc = sc)
 ```
 
-```{r, echo=FALSE}
-dl_metrics <- final_dl_model@model$cross_validation_metrics_summary[c(1,2,6,15,16,18,20),]
-
-metric_names <- c("accuracy",
-                  "auc", 
-                  "f1",
-                  "pr_auc",
-                  "precision",
-                  "recall",
-                  "specificity")
-metric_names <- data.frame(metric_names)
-
-dl_metrics <- dl_metrics %>% append(metric_names)
-dl_metrics <- data.frame(dl_metrics)
-
-dl_metrics_train <- dl_metrics %>%
-  select(metric_names, mean) %>%
-  mutate(mean = round(mean,3))
-
+```{r, echo=FALSE, message=FALSE, fig.show='hide', results='hide'}
+dl_metrics_train <- generate_metrics_classification(model = final_dl_model,
+                                                    type = "h2o_classification_train")
 colnames(dl_metrics_train) <- c("metric_names", "DL_train")
 ```
 
 
 ```{r, echo=FALSE, message=FALSE, fig.show='hide', results='hide'}
 dl_metrics_test <- generate_metrics_classification(model = dl_model,
-                                                    type = "h2o_classification",
+                                                    type = "h2o_classification_test",
                                                     test_data = test_data_h2o,
                                                     sc = sc)
 ```

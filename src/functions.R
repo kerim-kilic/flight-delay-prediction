@@ -40,7 +40,7 @@ generate_metrics_classification <- function(model,type,test_data, sc)
       ml_metrics_binary(metrics = "pr_auc") %>%
       pull(.estimate)
   }
-  if(type == "h2o_classification")
+  if(type == "h2o_classification_test")
   {
     predictions <- h2o.predict(model, test_data)
     predictions <- as.data.frame(predictions)
@@ -62,6 +62,28 @@ generate_metrics_classification <- function(model,type,test_data, sc)
     
     model_roc_auc <- h2o.auc(h2o.performance(model, newdata = test_data))
     model_pr_auc <- h2o.aucpr(h2o.performance(model, newdata = test_data))
+  }
+  if(type == "h2o_classification_train")
+  {
+    model_metrics <- model@model$cross_validation_metrics_summary[c(1,2,6,15,16,18,20),]
+    
+    metric_names <- c("accuracy",
+                      "auc", 
+                      "f1",
+                      "pr_auc",
+                      "precision",
+                      "recall",
+                      "specificity")
+    metric_names <- data.frame(metric_names)
+    
+    model_metrics <- model_metrics %>% append(metric_names)
+    model_metrics <- data.frame(model_metrics)
+    
+    model_metrics <- model_metrics %>%
+      select(metric_names, mean) %>%
+      mutate(mean = round(mean,3))
+    colnames(model_metrics) <- c("metric_names", "value")
+    return(model_metrics)
   }
   
   # Calculate the confusion matrix with TP, TN, FP, FN
