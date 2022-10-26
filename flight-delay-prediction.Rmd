@@ -135,46 +135,27 @@ train_data_regr %>% glimpse()
 Create the train, validation, test, split to use with the h2o framework.
 
 ```{r, message=FALSE}
-tmp <- class_delay_pipeline(raw_data)
+### Create the train, validation, test split for classification
+h2o_classification_split <- create_train_test_split(data = class_delay_pipeline(raw_data),
+                                                    sample_size = 100000,
+                                                    ratio = 0.6,
+                                                    type = "h2o_classification",
+                                                    hc = hc)
 
-sub_sample <- 100000
+train_data_h2o <- h2o_classification_split[[1]]
+valid_data_h2o <- h2o_classification_split[[2]]
+test_data_h2o  <- h2o_classification_split[[3]]
+### Create the train, validation, test split for numerical predictions
+h2o_numerical_split <- create_train_test_split(data = numer_delay_pipeline(raw_data),
+                                                    sample_size = 100000,
+                                                    ratio = 0.6,
+                                                    type = "h2o_numerical",
+                                                    hc = hc)
 
-delay_yes <- tmp %>%
-  filter(delay == "1")
-delay_no <- tmp %>%
-  filter(delay == "0")
-    
-tmp1 <- delay_yes %>% 
-      sample_n(sub_sample/2)
-tmp2 <- delay_no %>% 
-  sample_n(sub_sample/2)
-
-sample_data_classification <- rbind(tmp1, tmp2)
-sample_data_classification <- hc$asH2OFrame(sample_data_classification)
-sample_data_numerical <- tmp %>%
-  sample_n(100000)
-sample_data_numerical <- hc$asH2OFrame(sample_data_numerical)
-    
-### Train, validation, test split using h2o framework with classification
-splits <- h2o.splitFrame(
-  data = sample_data_classification,
-  ratios = c(0.6,0.2),   ## only need to specify 2 fractions, the 3rd is implied
-  destination_frames = c("train1.hex", "valid1.hex", "test1.hex"), seed = 1234
-)
-train_data_h2o <- splits[[1]]
-valid_data_h2o <- splits[[2]]
-test_data_h2o  <- splits[[3]]
-
-### Train, validation, test split using h2o framework with numerical prediction
-splits <- h2o.splitFrame(
-  data = sample_data_numerical,
-  ratios = c(0.6,0.2),   ## only need to specify 2 fractions, the 3rd is implied
-  destination_frames = c("train2.hex", "valid2.hex", "test2.hex"), seed = 1234
-)
-train_data_regr_h2o <- splits[[1]]
-valid_data_regr_h2o <- splits[[2]]
-test_data_regr_h2o  <- splits[[3]]
-
+train_data_regr_h2o <- h2o_numerical_split[[1]]
+valid_data_regr_h2o <- h2o_numerical_split[[2]]
+test_data_regr_h2o  <- h2o_numerical_split[[3]]
+###########
 rm(raw_data)
 ```
 

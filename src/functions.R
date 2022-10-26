@@ -139,7 +139,7 @@ generate_metrics_classification <- function(model,type,test_data, sc)
 }
 
 # Function to create the split of the data into train and test
-create_train_test_split <- function(data, sample_size, ratio, type)
+create_train_test_split <- function(data, sample_size, ratio, type, hc)
 {
   ## Splitted datasets for classification
   # Balanced training set using under sampling
@@ -179,6 +179,40 @@ create_train_test_split <- function(data, sample_size, ratio, type)
                              test_data = test_data)
     class(train_test_split) <- "train_test_split"
   }
+  
+  if(type == "h2o_classification")
+  {
+    delay_yes <- data %>%
+      filter(delay == "1")
+    delay_no <- data %>%
+      filter(delay == "0")
+    
+    tmp1 <- delay_yes %>% 
+      sample_n(sample_size/2)
+    tmp2 <- delay_no %>% 
+      sample_n(sample_size/2)
+    sample_data_classification <- rbind(tmp1, tmp2)
+    sample_data_classification <- hc$asH2OFrame(sample_data_classification)
+    
+    train_test_split <- h2o.splitFrame(
+      data = sample_data_classification,
+      ratios = c(ratio,(1-ratio)/2),   ## only need to specify 2 fractions, the 3rd is implied
+      destination_frames = c("train1.hex", "valid1.hex", "test1.hex"), seed = 1234
+    )
+  }
+  
+  if(type == "h2o_numerical")
+  {
+    sample_data_numerical <- data %>%
+      sample_n(sample_size)
+    sample_data_numerical <- hc$asH2OFrame(sample_data_numerical)
+    train_test_split <- h2o.splitFrame(
+      data = sample_data_numerical,
+      ratios = c(ratio,(1-ratio)/2),   ## only need to specify 2 fractions, the 3rd is implied
+      destination_frames = c("train2.hex", "valid2.hex", "test2.hex"), seed = 1234
+    )
+  }
+  
   return(train_test_split)
 }
 
