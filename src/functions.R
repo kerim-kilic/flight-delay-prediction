@@ -149,15 +149,13 @@ create_train_test_split <- function(data, sample_size, ratio, type, hc)
   if(type == "numerical")
   {
     ## Splitted datasets for numerical prediction
-    train_data_regr <- data %>%
-      sample_frac(train_size/sdf_nrow(data))
-    
-    test_data_regr <- data %>%
-      sample_frac(test_size/sdf_nrow(data))
-    
-    train_test_split <- list(train_data = train_data_regr,
-                             test_data = test_data_regr)
-    class(train_test_split) <- "train_test_split"
+    data_tmp <- data %>%
+      sample_frac(sample_size/sdf_nrow(data))
+  
+    train_test_split <- sdf_random_split(x = data_tmp,
+                                            train_data = ratio,
+                                            test_data = 1-ratio,
+                                            seed = 1234)  
   }
   
   if(type == "classification")
@@ -168,16 +166,15 @@ create_train_test_split <- function(data, sample_size, ratio, type, hc)
       filter(delay == "0")
     
     tmp1 <- delay_yes %>% 
-      sample_n(train_size/2)
+      sample_n(sample_size/2)
     tmp2 <- delay_no %>% 
-      sample_n(train_size/2)
-    train_data <- rbind(tmp1, tmp2)
+      sample_n(sample_size/2)
+    data_tmp <- rbind(tmp1, tmp2)
     
-    test_data <- data %>%
-      sample_frac(test_size/sdf_nrow(data))
-    train_test_split <- list(train_data = train_data,
-                             test_data = test_data)
-    class(train_test_split) <- "train_test_split"
+    train_test_split <- sdf_random_split(x = data_tmp,
+                                         train_data = ratio,
+                                         test_data = 1-ratio,
+                                         seed = 1234)  
   }
   
   if(type == "h2o_classification")

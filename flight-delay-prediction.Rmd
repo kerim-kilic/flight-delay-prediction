@@ -399,73 +399,13 @@ In this section we will train a gradient boosted machine model using the h2o fra
 <!-- Check this link for the tutorial for hyper parameter tuning a GBM model: -->
 <!-- https://h2o.ai/blog/h2o-gbm-tuning-tutorial-for-r/ -->
 
-### Baseline performance
-
-Let's train a baseline GBM model using the train data set.
+Define the variables to use in model training, cross validation and hyper parameter tuning.
 
 ```{r, message=FALSE, fig.show='hide', results='hide'}
 # Establish baseline performance
 y <- "delay"
 x <- setdiff(names(train_data_h2o), y)
-
-gbm <- h2o.gbm(x = x, y = y, training_frame = train_data_h2o)
-```
-
-Let's take a look at the baseline AUC using the validation data set.
-
-```{r}
-h2o.auc(h2o.performance(gbm, newdata = valid_data_h2o))
-```
-
-
-baseline performance with 4-fold cross validation.
-
-```{r, message=FALSE, fig.show='hide', results='hide'}
-gbm_cv <- h2o.gbm(x=x,
-                  y=y,
-                  training_frame = h2o.rbind(train_data_h2o, valid_data_h2o),
-                  nfolds = 4,
-                  seed = 2018)
-```
-
-Let's take a look at the baseline AUC with cross validation using both the train and validation data set.
-
-```{r}
-h2o.auc(h2o.performance(gbm_cv, xval = TRUE))
-```
-
-Training a GBM with arbitrarily picked parameters.
-
-```{r, message=FALSE, fig.show='hide', results='hide'}
-gbm <- h2o.gbm(
-  ## standard model parameters
-  x = x,
-  y = y,
-  training_frame = train_data_h2o,
-  validation_frame = valid_data_h2o,
-  ## more trees is better if the learning rate is small enough
-  ## here, use "more than enough" trees - we have early stopping
-  ntrees = 10000,
-  ## smaller learning rate is better (this is a good value for most datasets, but see below for annealing)
-  learn_rate=0.01,
-  ## early stopping once the validation AUC doesn't improve by at least 0.01% for 5 consecutive scoring events
-  stopping_rounds = 5, stopping_tolerance = 1e-4, stopping_metric = "AUC",
-  ## sample 80% of rows per tree
-  sample_rate = 0.8,
-  ## sample 80% of columns per split
-  col_sample_rate = 0.8,
-  ## fix a random number generator seed for reproducibility
-  seed = 2018,
-  ## score every 10 trees to make early stopping reproducible (it depends on the scoring interval)
-  score_tree_interval = 10
-)
-```
-
-Get the AUC on the validation data set using some arbitrarily picked parameters.
-
-```{r}
-## Get the AUC on the validation set
-h2o.auc(h2o.performance(gbm))
+# gbm <- h2o.gbm(x = x, y = y, training_frame = train_data_h2o)
 ```
 
 ### Hyper-parameter tuning the GBM model
@@ -473,9 +413,9 @@ h2o.auc(h2o.performance(gbm))
 Perform hyper-parameter tuning to figure out the best value for depth.
 
 ```{r, message=FALSE, fig.show='hide', results='hide'}
-## Depth 10 is usually plenty of depth for most datasets, but you never know
+### Define the range of depth to tune for
 hyper_params = list( max_depth = seq(1,29,2) )
-#hyper_params = list( max_depth = c(4,6,8,12,16,20) ) ##faster for larger datasets
+
 grid <- h2o.grid(
   ## hyper parameters
   hyper_params = hyper_params,
@@ -512,21 +452,8 @@ grid <- h2o.grid(
   ## score every 10 trees to make early stopping reproducible (it depends on the scoring interval)
   score_tree_interval = 10
 )
-```
-
-```{r}
-## by default, display the grid search results sorted by increasing logloss (since this is a classification task)
-grid
-```
-
-```{r}
-## sort the grid models by decreasing AUC
+### Get the grid and sort decreasing by AUC 
 sortedGrid <- h2o.getGrid("depth_grid", sort_by="auc", decreasing = TRUE)
-sortedGrid
-```
-
-```{r}
-## find the range of max_depth for the top 5 models
 topDepths = sortedGrid@summary_table$max_depth[1:5]
 minDepth = min(as.numeric(topDepths))
 maxDepth = max(as.numeric(topDepths))
@@ -603,25 +530,20 @@ grid <- h2o.grid(
   ## base random number generator seed for each model (automatically gets incremented internally for each model)
   seed = 1234
 )
-```
-
-```{r}
-## Sort the grid models by AUC
+## Sort the grid models by AUC and select the best performing model
 sortedGrid <- h2o.getGrid("final_grid", sort_by = "auc", decreasing = TRUE)
-sortedGrid
-```
-
-Inspection of the best model of the grid search:
-
-```{r}
 gbm <- h2o.getModel(sortedGrid@model_ids[[1]])
-print(h2o.auc(h2o.performance(gbm, newdata = test_data_h2o)))
 ```
 
-Check the parameters of the winning model.
+Show the metrics of the model with the thresholds
 
 ```{r}
-gbm@parameters
+gbm@model$validation_metrics@metrics$max_criteria_and_metric_scores[c(1,4:7),] %>%
+  mutate(threshold = round(threshold,3),
+         value = round(value,3)) %>%
+  select(metric,threshold,value) %>%
+  kbl() %>%
+  kable_minimal()
 ```
 
 ### Train the tuned model using the whole training set
@@ -642,49 +564,14 @@ final_gbm_model <- do.call(h2o.gbm,
 )
 ```
 
-```{r}
-final_gbm_model@model$cross_validation_metrics_summary
-```
-
-<!-- You can use the following code to check the variance: -->
-<!-- Commenting out since it does not show much effect. -->
-
-<!-- ```{r} -->
-<!-- for (i in 1:5) { -->
-<!--   gbm <- h2o.getModel(sortedGrid@model_ids[[i]]) -->
-<!--   cvgbm <- do.call(h2o.gbm, -->
-<!--         ## update parameters in place -->
-<!--         { -->
-<!--           p <- gbm@parameters -->
-<!--           p$model_id = NULL          ## do not overwrite the original grid model -->
-<!--           p$training_frame = h2o.rbind(train_data_h2o, valid_data_h2o)      ## use the full dataset -->
-<!--           p$validation_frame = NULL  ## no validation frame -->
-<!--           p$nfolds = 5               ## cross-validation -->
-<!--           p -->
-<!--         } -->
-<!--   ) -->
-<!--   print(gbm@model_id) -->
-<!--   print(cvgbm@model$cross_validation_metrics_summary[5,]) ## Pick out the "AUC" row -->
-<!-- } -->
-<!-- ``` -->
-
-Make predictions on the test set:
-
-```{r, message=FALSE, fig.show='hide', results='hide'}
-gbm <- h2o.getModel(sortedGrid@model_ids[[1]])
-preds <- h2o.predict(gbm, test_data_h2o)
-```
-
-Show some of the predictions:
+Model metrics of the final tuned model:
 
 ```{r}
-head(preds)
-```
-
-Show the metrics of the model with the thresholds
-
-```{r}
-gbm@model$validation_metrics@metrics$max_criteria_and_metric_scores
+gbm_metrics_final <- generate_metrics_classification(final_gbm_model,
+                                                    "h2o_classification_train")
+gbm_metrics_final %>%
+  kbl() %>%
+  kable_minimal()
 ```
 
 Save the model:
@@ -780,7 +667,7 @@ hyper_params <- list(
   rate=c(0.01,0.02),
   rate_annealing=c(1e-8,1e-7,1e-6)
 )
-hyper_params
+
 grid <- h2o.grid(
   algorithm="deeplearning",
   grid_id="dl_grid", 
@@ -809,10 +696,6 @@ grid <- h2o.grid(
 ```{r}
 ## Sort the grid models by AUC
 sortedGrid <- h2o.getGrid("dl_grid", sort_by = "auc", decreasing = TRUE)
-sortedGrid
-```
-
-```{r, message=FALSE, fig.show='hide', results='hide'}
 best_model <- h2o.getModel(grid@model_ids[[1]])
 ```
 
