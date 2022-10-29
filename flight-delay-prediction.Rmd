@@ -405,7 +405,6 @@ Define the variables to use in model training, cross validation and hyper parame
 # Establish baseline performance
 y <- "delay"
 x <- setdiff(names(train_data_h2o), y)
-# gbm <- h2o.gbm(x = x, y = y, training_frame = train_data_h2o)
 ```
 
 ### Hyper-parameter tuning the GBM model
@@ -582,81 +581,9 @@ h2o.saveModel(gbm, "models/h2o/gbm_classification.csv", force=TRUE)
 
 ## Train a deep learning model using the h2o framework
 
-### Baseline performance
+In this section we will train, hyper parameter tune, and cross validate a deep learning model.
 
-Establish baseline performance
-
-```{r, message=FALSE, fig.show='hide', results='hide'}
-dl_model <- h2o.deeplearning(
-  model_id = "dl_model1", 
-  training_frame = train_data_h2o, 
-  validation_frame = valid_data_h2o,   ## validation dataset: used for scoring and early stopping
-  x = x,
-  y = y,
-  #activation="Rectifier",  ## default
-  #hidden=c(200,200),       ## default: 2 hidden layers with 200 neurons each
-  epochs = 1,
-  variable_importances = T    ## not enabled by default
-)
-# summary(dl_model)
-```
-
-Let's take a look at variable importance
-
-```{r}
-head(as.data.frame(h2o.varimp(dl_model))) %>%
-  kbl() %>%
-  kable_minimal()
-```
-
-Implement early stopping to the model
-
-```{r, message=FALSE, fig.show='hide', results='hide'}
-m2 <- h2o.deeplearning(
-  model_id="dl_model_faster", 
-  training_frame=train_data_h2o, 
-  validation_frame=valid_data_h2o,
-  x=x,
-  y=y,
-  hidden=c(32,32,32),                  ## small network, runs faster
-  epochs=1000000,                      ## hopefully converges earlier...
-  score_validation_samples=10000,      ## sample the validation dataset (faster)
-  stopping_rounds=2,
-  stopping_metric="misclassification", ## could be "MSE","logloss","r2"
-  stopping_tolerance=0.01
-)
-# summary(m2)
-# plot(m2)
-```
-
-### Hyper parameter tuning the deep learning model
-
-Tuning the deep learning model
-
-```{r, message=FALSE, fig.show='hide', results='hide'}
-m3 <- h2o.deeplearning(
-  model_id="dl_model_tuned", 
-  training_frame=train_data_h2o, 
-  validation_frame=valid_data_h2o, 
-  x=x, 
-  y=y, 
-  overwrite_with_best_model=F,    ## Return the final model after 10 epochs, even if not the best
-  hidden=c(128,128,128),          ## more hidden layers -> more complex interactions
-  epochs=10,                      ## to keep it short enough
-  score_validation_samples=10000, ## downsample validation set for faster scoring
-  score_duty_cycle=0.025,         ## don't score more than 2.5% of the wall time
-  adaptive_rate=F,                ## manually tuned learning rate
-  rate=0.01, 
-  rate_annealing=2e-6,            
-  momentum_start=0.2,             ## manually tuned momentum
-  momentum_stable=0.4, 
-  momentum_ramp=1e7, 
-  l1=1e-5,                        ## add some L1/L2 regularization
-  l2=1e-5,
-  max_w2=10                       ## helps stability for Rectifier
-) 
-summary(m3)
-```
+### Hyper-parameter tuning the deep learning model
 
 Hyper parameter tuning with grid search
 
@@ -676,27 +603,40 @@ grid <- h2o.grid(
   x=x, 
   y=y,
   epochs=10,
+  ### stop when misclassification does not improve by >=1% for 2 scoring events
   stopping_metric="misclassification",
-  stopping_tolerance=1e-2,        ## stop when misclassification does not improve by >=1% for 2 scoring events
+  stopping_tolerance=1e-2,        
   stopping_rounds=2,
-  score_validation_samples=10000, ## downsample validation set for faster scoring
-  score_duty_cycle=0.025,         ## don't score more than 2.5% of the wall time
-  adaptive_rate=F,                ## manually tuned learning rate
-  momentum_start=0.5,             ## manually tuned momentum
+  ### downsample validation set for faster scoring
+  # score_validation_samples=10000,
+  ### don't score more than 2.5% of the wall time
+  score_duty_cycle=0.025,         
+  ### Settings for manual or adaptive learning
+  adaptive_rate=F,                
+  momentum_start=0.5,             
   momentum_stable=0.9, 
   momentum_ramp=1e7, 
   l1=1e-5,
   l2=1e-5,
   activation=c("Rectifier"),
-  max_w2=10,                      ## can help improve stability for Rectifier
+  ### can help improve stability for Rectifier
+  max_w2=10,                    
   hyper_params=hyper_params
 )
-```
-
-```{r}
 ## Sort the grid models by AUC
 sortedGrid <- h2o.getGrid("dl_grid", sort_by = "auc", decreasing = TRUE)
-best_model <- h2o.getModel(grid@model_ids[[1]])
+best_dl_model <- h2o.getModel(grid@model_ids[[1]])
+```
+
+Show the metrics of the model with the thresholds
+
+```{r}
+best_dl_model@model$validation_metrics@metrics$max_criteria_and_metric_scores[c(1,4:7),] %>%
+  mutate(threshold = round(threshold,3),
+         value = round(value,3)) %>%
+  select(metric,threshold,value) %>%
+  kbl() %>%
+  kable_minimal()
 ```
 
 ### Train a tuned deep learning model using the entire training set
@@ -707,7 +647,7 @@ Build a model on the whole training set:
 final_dl_model <- do.call(h2o.deeplearning,
         ## update parameters in place
         {
-          p <- best_model@parameters
+          p <- best_dl_model@parameters
           p$model_id = NULL          ## do not overwrite the original grid model
           p$training_frame = h2o.rbind(train_data_h2o, valid_data_h2o)      ## use the full dataset
           p$validation_frame = NULL  ## no validation frame
@@ -717,21 +657,20 @@ final_dl_model <- do.call(h2o.deeplearning,
 )
 ```
 
+Model metrics of the final tuned model:
+
 ```{r}
-final_dl_model@model$cross_validation_metrics_summary
-```
-
-Make predictions on the test set:
-
-```{r, message=FALSE, fig.show='hide', results='hide'}
-dl_model <- h2o.getModel(sortedGrid@model_ids[[1]])
-preds_dl <- h2o.predict(dl_model, test_data_h2o)
+gbm_metrics_final <- generate_metrics_classification(final_dl_model,
+                                                    "h2o_classification_train")
+gbm_metrics_final %>%
+  kbl() %>%
+  kable_minimal()
 ```
 
 Save the model:
 
 ```{r, message=FALSE, fig.show='hide', results='hide'}
-h2o.saveModel(dl_model, "models/h2o/dl_classification.csv", force=TRUE)
+h2o.saveModel(best_dl_model, "models/h2o/dl_classification.csv", force=TRUE)
 ```
 
 # Numerical prediction of the delay time
@@ -951,9 +890,8 @@ dl_metrics_train <- generate_metrics_classification(model = final_dl_model,
 colnames(dl_metrics_train) <- c("metric_names", "DL_train")
 ```
 
-
 ```{r, echo=FALSE, message=FALSE, fig.show='hide', results='hide'}
-dl_metrics_test <- generate_metrics_classification(model = dl_model,
+dl_metrics_test <- generate_metrics_classification(model = best_dl_model,
                                                     type = "h2o_classification_test",
                                                     test_data = test_data_h2o,
                                                     sc = sc)
