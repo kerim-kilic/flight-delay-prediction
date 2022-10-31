@@ -63,36 +63,155 @@ h2oConf <- rsparkling::H2OConf()
 hc <- H2OContext.getOrCreate(h2oConf)
 ```
 
-# Create datacleaning pipeline
+<!-- # Create datacleaning pipeline -->
+
+<!-- ```{r} -->
+<!-- # Create the main pipeline -->
+<!-- # Remove unnecessary variables -->
+<!-- # Remove any row with any NA value -->
+<!-- # Classify flights with a delay with "1",  and no delay with "0" -->
+<!-- main_pipeline <- .%>% -->
+<!--   na.omit() %>% -->
+<!--   mutate(delay_time = actual_arrival_time - planned_arrival_time, -->
+<!--          delay_time = minute(delay_time) + (hour(delay_time)*60) + (second(delay_time)/60), -->
+<!--          delay = case_when(delay_time > 0 ~ "1", -->
+<!--                            delay_time <= 0 ~ "0")) %>% -->
+<!--   select(quarter,month,day_of_month,day_of_week,hour_of_day,minutes_of_hour, -->
+<!--          planned_departure_local_hour,planned_arrival_local_hour, -->
+<!--          # wheels_off_time_local_hour,wheels_on_time_local_hour, -->
+<!--          flight_distance,seating_capacity, -->
+<!--          delay,delay_time) -->
+
+<!-- # Create the numerical delay sub-pipeline -->
+<!-- # Sum the individual types of delay to a total delay_time. -->
+<!-- # Remove individual delays -->
+<!-- numer_delay_pipeline <- .%>% main_pipeline %>% -->
+<!--   select(-delay) -->
+
+<!-- # Create the classification sub-pipeline -->
+<!-- # Remove the individual delays -->
+<!-- class_delay_pipeline <- .%>% main_pipeline %>% -->
+<!--   select(-delay_time) %>% -->
+<!--   group_by(delay) -->
+<!-- ``` -->
+
+# Weather code in development right here
 
 ```{r}
-# Create the main pipeline
-# Remove unnecessary variables
-# Remove any row with any NA value
-# Classify flights with a delay with "1",  and no delay with "0"
+### Check the top 10 origin and destination with the most flight traffic to narrow down the data
+raw_data_tmp <- (raw_data) %>% select(origin,destination) %>% collect()
+tmp1 <- data.frame(table(raw_data_tmp$origin))
+tmp2 <- data.frame(table(raw_data_tmp$destination))
+tmp1 <- tmp1[order(-tmp1$Freq),] %>% head(10)
+tmp2 <- tmp2[order(-tmp2$Freq),] %>% head(10)
+airports <- tmp1 %>% 
+  mutate(Var1 = as.character(Var1)) %>%
+  pull(Var1)
+```
+
+```{r}
 main_pipeline <- .%>%
   na.omit() %>%
-  mutate(delay_time = actual_arrival_time - planned_arrival_time,
+  mutate(delay_time = actual_departure_time - planned_departure_time,
+         # delay_time = actual_arrival_time - planned_arrival_time,
          delay_time = minute(delay_time) + (hour(delay_time)*60) + (second(delay_time)/60),
-         delay = case_when(delay_time > 0 ~ "1",
-                           delay_time <= 0 ~ "0")) %>%
-  select(quarter,month,day_of_month,day_of_week,hour_of_day,minutes_of_hour,
+         delay = case_when(delay_time >= 15 ~ "1",
+                           delay_time < 15 ~ "0"),
+         date = paste0(year,"-",month,"-",day_of_month))%>%
+  select(date,quarter,month,day_of_month,day_of_week,hour_of_day,minutes_of_hour,
          planned_departure_local_hour,planned_arrival_local_hour,
          # wheels_off_time_local_hour,wheels_on_time_local_hour,
          flight_distance,seating_capacity,
-         delay,delay_time)
+         # origin,destination,
+         origin,
+         delay,delay_time) %>%
+  filter(origin %in% airports)
 
 # Create the numerical delay sub-pipeline
 # Sum the individual types of delay to a total delay_time.
 # Remove individual delays
-numer_delay_pipeline <- .%>% main_pipeline %>% 
+numer_delay_pipeline <- .%>% main_pipeline %>%
   select(-delay)
 
 # Create the classification sub-pipeline
-# Remove the individual delays 
-class_delay_pipeline <- .%>% main_pipeline %>% 
+# Remove the individual delays
+class_delay_pipeline <- .%>% main_pipeline %>%
   select(-delay_time) %>%
   group_by(delay)
+```
+
+Using the worldmet package
+
+```{r}
+library(worldmet)
+# getMeta(site = "HARTSFIELD-JACKSON ATLANTA")
+# getMeta(site = "Denver")
+# getMeta(site = "O'Hare")
+# getMeta(site = "Los Angeles")
+# getMeta(site = "Dallas")
+# getMeta(site = "San Francisco")
+# getMeta(site = "Phoenix")
+# getMeta(site = "MCCARRAN INTERNATIONAL AIRPORT")
+# getMeta(site = "seattle")
+# getMeta(site = "Minneapolis")
+### Get the correct data for each airport
+ATL_data_raw <- importNOAA(code = "722190-13874", year = 2017) %>%
+  mutate(origin = "ATL")
+DEN_data_raw <- importNOAA(code = "725650-03017", year = 2017) %>%
+  mutate(origin = "DEN")
+ORD_data_raw <- importNOAA(code = "725300-94846", year = 2017) %>%
+  mutate(origin = "ORD")
+LAX_data_raw <- importNOAA(code = "722950-23174", year = 2017) %>%
+  mutate(origin = "LAX")
+DFW_data_raw <- importNOAA(code = "722590-03927", year = 2017) %>%
+  mutate(origin = "DFW")
+SFO_data_raw <- importNOAA(code = "724940-23234", year = 2017) %>%
+  mutate(origin = "SFO")
+PHX_data_raw <- importNOAA(code = "722780-23183", year = 2017) %>%
+  mutate(origin = "PHX")
+LAS_data_raw <- importNOAA(code = "723860-23169", year = 2017) %>%
+  mutate(origin = "LAS")
+SEA_data_raw <- importNOAA(code = "727930-24233", year = 2017) %>%
+  mutate(origin = "SEA")
+MSP_data_raw <- importNOAA(code = "726580-14922", year = 2017) %>%
+  mutate(origin = "MSP")
+###
+weather_data <- rbind(ATL_data_raw,DEN_data_raw,ORD_data_raw,LAX_data_raw,
+                      DFW_data_raw,SFO_data_raw,PHX_data_raw,LAS_data_raw,
+                      SEA_data_raw,MSP_data_raw)
+###
+weather_pipeline <-  .%>%
+  mutate(date = as.Date(date,format = "%y-%m-%d")) %>%
+  select(origin,date,latitude,longitude,elev,
+         ws,wd,air_temp,atmos_pres,visibility,dew_point) %>%
+  na.omit()
+
+weather_data <- weather_pipeline(weather_data)
+
+weather_data <- weather_data %>%
+  group_by(origin, date) %>%
+  summarise(across(c(latitude, longitude, elev, ws, wd, air_temp, atmos_pres,
+                     visibility, dew_point), mean))
+
+###
+weather_data <- copy_to(dest = sc,
+                       df = weather_data,
+                       overwrite = TRUE)
+###
+weather_data_h2o <- hc$asH2OFrame(weather_data)
+# flight_data <- main_pipeline(raw_data)
+# joined_data <- left_join(flight_data, weather_data,by=c("origin"="origin","date"="date"))
+# 
+# joined_data <- joined_data %>%
+#   select(date,quarter,month,day_of_month,day_of_week,hour_of_day,minutes_of_hour,
+#          planned_departure_local_hour,planned_arrival_local_hour,
+#          # wheels_off_time_local_hour,wheels_on_time_local_hour,
+#          flight_distance,seating_capacity,
+#          # origin,destination,
+#          origin,
+#          delay,delay_time,
+#          latitude,longitude,elev,ws,wd,air_temp,atmos_pres,visibility,dew_point)
+# raw_data <- joined_data
 ```
 
 # Splitting data in train and test sets
@@ -108,14 +227,24 @@ classification_split <- create_train_test_split(data = class_delay_pipeline(raw_
                                                 ratio = 0.8,
                                                 type = "classification")
 train_data <- classification_split$train_data
+train_data <- left_join(train_data, weather_data,by=c("origin"="origin","date"="date")) %>%
+  select(-origin,-date)
+
 test_data <- classification_split$test_data
+test_data <- left_join(test_data, weather_data,by=c("origin"="origin","date"="date")) %>%
+  select(-origin,-date)
 # Split for numerical predictions
 numerical_split <- create_train_test_split(data = numer_delay_pipeline(raw_data),
                                       sample_size = 100000,
                                       ratio = 0.8,
                                       type = "numerical")
 train_data_regr <- numerical_split$train_data
+train_data_regr <- left_join(train_data_regr, weather_data,by=c("origin"="origin","date"="date")) %>%
+  select(-origin,-date)
+
 test_data_regr <- numerical_split$test_data
+test_data_regr <- left_join(test_data_regr, weather_data,by=c("origin"="origin","date"="date")) %>%
+  select(-origin,-date)
 ```
 
 Let's glimpse into the train data for classification.
@@ -136,7 +265,14 @@ Create the train, validation, test, split to use with the h2o framework.
 
 ```{r, message=FALSE}
 ### Create the train, validation, test split for classification
-h2o_classification_split <- create_train_test_split(data = class_delay_pipeline(raw_data),
+class_data <- left_join(class_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) %>%
+  # select(-origin,-date)
+  select(-date)
+numer_data <- left_join(numer_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) %>%
+  # select(-origin,-date)
+  select(-date)
+h2o_classification_split <- create_train_test_split(data = class_data,
+                                                    # data = class_delay_pipeline(raw_data),
                                                     sample_size = 100000,
                                                     ratio = 0.6,
                                                     type = "h2o_classification",
@@ -144,17 +280,29 @@ h2o_classification_split <- create_train_test_split(data = class_delay_pipeline(
 
 train_data_h2o <- h2o_classification_split[[1]]
 valid_data_h2o <- h2o_classification_split[[2]]
+# valid_data_h2o <- h2o.merge(valid_data_h2o, weather_data,by=c("origin"="origin","date"="date")) %>%
+#   select(-origin,-date)
 test_data_h2o  <- h2o_classification_split[[3]]
+# test_data_h2o <- h2o.merge(test_data_h2o, weather_data,by=c("origin"="origin","date"="date")) %>%
+#   select(-origin,-date)
+
 ### Create the train, validation, test split for numerical predictions
-h2o_numerical_split <- create_train_test_split(data = numer_delay_pipeline(raw_data),
-                                                    sample_size = 100000,
-                                                    ratio = 0.6,
-                                                    type = "h2o_numerical",
-                                                    hc = hc)
+h2o_numerical_split <- create_train_test_split(data = numer_data,
+                                               # data = numer_delay_pipeline(raw_data),
+                                               sample_size = 100000,
+                                               ratio = 0.6,
+                                               type = "h2o_numerical",
+                                               hc = hc)
 
 train_data_regr_h2o <- h2o_numerical_split[[1]]
+# train_data_regr_h2o <- h2o.merge(train_data_regr_h2o, weather_data,by=c("origin"="origin","date"="date")) %>%
+#   select(-origin,-date)
 valid_data_regr_h2o <- h2o_numerical_split[[2]]
+# valid_data_regr_h2o <- h2o.merge(valid_data_regr_h2o, weather_data,by=c("origin"="origin","date"="date")) %>%
+#   select(-origin,-date)
 test_data_regr_h2o  <- h2o_numerical_split[[3]]
+# test_data_regr_h2o <- h2o.merge(test_data_regr_h2o, weather_data,by=c("origin"="origin","date"="date")) %>%
+#   select(-origin,-date)
 ###########
 rm(raw_data)
 ```
@@ -402,7 +550,6 @@ In this section we will train a gradient boosted machine model using the h2o fra
 Define the variables to use in model training, cross validation and hyper parameter tuning.
 
 ```{r, message=FALSE, fig.show='hide', results='hide'}
-# Establish baseline performance
 y <- "delay"
 x <- setdiff(names(train_data_h2o), y)
 ```
@@ -621,7 +768,8 @@ grid <- h2o.grid(
   activation=c("Rectifier"),
   ### can help improve stability for Rectifier
   max_w2=10,                    
-  hyper_params=hyper_params
+  hyper_params=hyper_params,
+  categorical_encoding = "auto"
 )
 ## Sort the grid models by AUC
 sortedGrid <- h2o.getGrid("dl_grid", sort_by = "auc", decreasing = TRUE)
