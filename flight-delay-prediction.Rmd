@@ -138,7 +138,8 @@ weather_data <- rbind(ATL_data_raw,DEN_data_raw,ORD_data_raw,LAX_data_raw,
 ###
 weather_pipeline <-  .%>%
   mutate(date = as.Date(date,format = "%y-%m-%d")) %>%
-  select(origin,date,latitude,longitude,elev,
+  select(origin,date,
+         # latitude,longitude,elev,
          ws,wd,air_temp,atmos_pres,visibility,dew_point) %>%
   na.omit()
 
@@ -146,15 +147,25 @@ weather_data <- weather_pipeline(weather_data)
 
 weather_data <- weather_data %>%
   group_by(origin, date) %>%
-  summarise(across(c(latitude, longitude, elev, ws, wd, air_temp, atmos_pres,
+  summarise(across(c(ws,
+                     # latitude, longitude, elev, 
+                     wd, air_temp, atmos_pres,
                      visibility, dew_point), mean))
-
+weather_data2 <- weather_data
+###
+colnames(weather_data) <- c("origin", "date", "origin_ws", "origin_wd", "origin_air_temp", "origin_atmos_pres", "origin_visibility", "origin_dew_point")
+colnames(weather_data2) <- c("destination", "date", "destination_ws", "destination_wd", 
+                             "destination_air_temp", "destination_atmos_pres", "destination_visibility", "destination_dew_point")
 ###
 weather_data <- copy_to(dest = sc,
                        df = weather_data,
                        overwrite = TRUE)
+weather_data2 <- copy_to(dest = sc,
+                       df = weather_data2,
+                       overwrite = TRUE)
 ###
 weather_data_h2o <- hc$asH2OFrame(weather_data)
+weather_data_h2o2 <- hc$asH2OFrame(weather_data2)
 ```
 
 # Splitting data in train and test sets
@@ -168,12 +179,17 @@ Take a sample set of the data to reduce time to train the model.
 data_size <- 10000
 
 ### Create the train, validation, test split for classification
-class_data <- left_join(class_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) %>%
+class_data <- left_join(class_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) 
+# %>%
   # select(-origin,-date)
+  # select(-date)
+class_data <- left_join(class_data, weather_data2,by=c("destination"="destination","date"="date")) %>%
   select(-date)
-numer_data <- left_join(numer_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) %>%
+numer_data <- left_join(numer_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) 
+# %>%
   # select(-origin,-date)
-  select(-date)
+  # select(-date)
+numer_data <- left_join(numer_data, weather_data2,by=c("destination"="destination","date"="date")) 
 
 ### Apply one hot encoding to origin and destination
 class_data_tmp <- ft_string_indexer(class_data, input_col = "origin", output_col = "origin_ind")
@@ -231,11 +247,17 @@ Create the train, validation, test, split to use with the h2o framework.
 
 ```{r, message=FALSE}
 ### Create the train, validation, test split for classification
-class_data <- left_join(class_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) %>%
+class_data <- left_join(class_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) 
+# %>%
   # select(-origin,-date)
+  # select(-date)
+class_data <- left_join(class_data, weather_data2,by=c("destination"="destination","date"="date")) %>%
   select(-date)
-numer_data <- left_join(numer_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) %>%
+numer_data <- left_join(numer_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) 
+# %>%
   # select(-origin,-date)
+  # select(-date)
+numer_data <- left_join(numer_data, weather_data2,by=c("destination"="destination","date"="date"))  %>%
   select(-date)
 h2o_classification_split <- create_train_test_split(data = class_data,
                                                     # data = class_delay_pipeline(raw_data),
