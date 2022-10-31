@@ -77,12 +77,10 @@ main_pipeline <- .%>%
          date = paste0(year,"-",month,"-",day_of_month))%>%
   select(date,quarter,month,day_of_month,day_of_week,hour_of_day,minutes_of_hour,
          planned_departure_local_hour,planned_arrival_local_hour,
-         # wheels_off_time_local_hour,wheels_on_time_local_hour,
          flight_distance,seating_capacity,
-         # origin,destination,
-         origin,
+         origin,destination,
          delay,delay_time) %>%
-  filter(origin %in% airports)
+  filter(origin %in% airports, destination %in% airports)
 
 # Create the numerical delay sub-pipeline
 # Sum the individual types of delay to a total delay_time.
@@ -111,9 +109,7 @@ airports <- tmp1 %>%
   pull(Var1)
 ```
 
-Using the worldmet package
-
-```{r}
+```{r, message=FALSE, fig.show='hide', results='hide'}
 ### Get the correct data for each airport
 ATL_data_raw <- importNOAA(code = "722190-13874", year = 2017) %>%
   mutate(origin = "ATL")
@@ -169,29 +165,52 @@ Take a sample set of the data to reduce time to train the model.
 
 ```{r, message=FALSE}
 # Split for classification
-classification_split <- create_train_test_split(data = class_delay_pipeline(raw_data),
-                                                sample_size = 100000,
+data_size <- 10000
+
+### Create the train, validation, test split for classification
+class_data <- left_join(class_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) %>%
+  # select(-origin,-date)
+  select(-date)
+numer_data <- left_join(numer_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) %>%
+  # select(-origin,-date)
+  select(-date)
+
+### Apply one hot encoding to origin and destination
+class_data_tmp <- ft_string_indexer(class_data, input_col = "origin", output_col = "origin_ind")
+class_data_tmp <- ft_string_indexer(class_data_tmp, input_col = "destination", output_col = "destination_ind")
+class_data <- ft_one_hot_encoder(class_data_tmp, input_cols = c("origin_ind","destination_ind"), output_cols = c("origin_out","destination_out")) %>%
+  select(-origin,-destination)
+### Apply one hot encoding to origin and destination
+numer_data_tmp <- ft_string_indexer(numer_data, input_col = "origin", output_col = "origin_ind")
+numer_data_tmp <- ft_string_indexer(numer_data_tmp, input_col = "destination", output_col = "destination_ind")
+numer_data <- ft_one_hot_encoder(numer_data_tmp, input_cols = c("origin_ind","destination_ind"), output_cols = c("origin_out","destination_out")) %>%
+  select(-origin,-destination)
+###
+classification_split <- create_train_test_split(data = class_data,
+                                                # data = class_delay_pipeline(raw_data),
+                                                sample_size = data_size,
                                                 ratio = 0.8,
                                                 type = "classification")
 train_data <- classification_split$train_data
-train_data <- left_join(train_data, weather_data,by=c("origin"="origin","date"="date")) %>%
-  select(-origin,-date)
+# train_data <- left_join(train_data, weather_data,by=c("origin"="origin","date"="date")) %>%
+#   select(-origin,-destination,-date)
 
 test_data <- classification_split$test_data
-test_data <- left_join(test_data, weather_data,by=c("origin"="origin","date"="date")) %>%
-  select(-origin,-date)
+# test_data <- left_join(test_data, weather_data,by=c("origin"="origin","date"="date")) %>%
+#   select(-origin,-destination,-date)
 # Split for numerical predictions
-numerical_split <- create_train_test_split(data = numer_delay_pipeline(raw_data),
-                                      sample_size = 100000,
-                                      ratio = 0.8,
-                                      type = "numerical")
+numerical_split <- create_train_test_split(data = numer_data,
+                                           # data = numer_delay_pipeline(raw_data),
+                                           sample_size = data_size,
+                                           ratio = 0.8,
+                                           type = "numerical")
 train_data_regr <- numerical_split$train_data
-train_data_regr <- left_join(train_data_regr, weather_data,by=c("origin"="origin","date"="date")) %>%
-  select(-origin,-date)
+# train_data_regr <- left_join(train_data_regr, weather_data,by=c("origin"="origin","date"="date")) %>%
+#   select(-origin,-destination,-date)
 
 test_data_regr <- numerical_split$test_data
-test_data_regr <- left_join(test_data_regr, weather_data,by=c("origin"="origin","date"="date")) %>%
-  select(-origin,-date)
+# test_data_regr <- left_join(test_data_regr, weather_data,by=c("origin"="origin","date"="date")) %>%
+#   select(-origin,-destination,-date)
 ```
 
 Let's glimpse into the train data for classification.
@@ -220,7 +239,7 @@ numer_data <- left_join(numer_delay_pipeline(raw_data), weather_data,by=c("origi
   select(-date)
 h2o_classification_split <- create_train_test_split(data = class_data,
                                                     # data = class_delay_pipeline(raw_data),
-                                                    sample_size = 100000,
+                                                    sample_size = data_size,
                                                     ratio = 0.6,
                                                     type = "h2o_classification",
                                                     hc = hc)
@@ -236,7 +255,7 @@ test_data_h2o  <- h2o_classification_split[[3]]
 ### Create the train, validation, test split for numerical predictions
 h2o_numerical_split <- create_train_test_split(data = numer_data,
                                                # data = numer_delay_pipeline(raw_data),
-                                               sample_size = 100000,
+                                               sample_size = data_size,
                                                ratio = 0.6,
                                                type = "h2o_numerical",
                                                hc = hc)
@@ -540,10 +559,11 @@ grid <- h2o.grid(
   seed = 1234,
   ## early stopping once the validation AUC doesn't improve by at least 0.01% for 5 consecutive scoring events
   stopping_rounds = 5,
-  stopping_tolerance = 1e-4,
+  stopping_tolerance = 1e-2,
   stopping_metric = "AUC",
   ## score every 10 trees to make early stopping reproducible (it depends on the scoring interval)
-  score_tree_interval = 10
+  score_tree_interval = 10,
+  categorical_encoding = "auto"
 )
 ### Get the grid and sort decreasing by AUC 
 sortedGrid <- h2o.getGrid("depth_grid", sort_by="auc", decreasing = TRUE)
@@ -617,11 +637,12 @@ grid <- h2o.grid(
   ## early stopping based on timeout (no model should take more than 1 hour - modify as needed)
   max_runtime_secs = 3600,
   ## early stopping once the validation AUC doesn't improve by at least 0.01% for 5 consecutive scoring events
-  stopping_rounds = 5, stopping_tolerance = 1e-4, stopping_metric = "AUC",
+  stopping_rounds = 5, stopping_tolerance = 1e-2, stopping_metric = "AUC",
   ## score every 10 trees to make early stopping reproducible (it depends on the scoring interval)
   score_tree_interval = 10,
   ## base random number generator seed for each model (automatically gets incremented internally for each model)
-  seed = 1234
+  seed = 1234,
+  categorical_encoding = "auto"
 )
 ## Sort the grid models by AUC and select the best performing model
 sortedGrid <- h2o.getGrid("final_grid", sort_by = "auc", decreasing = TRUE)
