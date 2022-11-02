@@ -32,7 +32,7 @@ library(worldmet)
 
 ## Initialize spark and read in flights data
 
-```{r}
+```{r, spark_setup}
 ### Check if spark installation exists, if not install correct version
 if(!spark_install_find("3.3.0")$installed)
 {
@@ -59,14 +59,14 @@ raw_data %>% glimpse()
 
 ## Initialize h2o 
 
-```{r, message=FALSE, fig.show='hide', results='hide'}
+```{r, h2o_setup, message=FALSE, fig.show='hide', results='hide'}
 h2oConf <- rsparkling::H2OConf()
 hc <- H2OContext.getOrCreate(h2oConf)
 ```
 
 # Create datacleaning pipeline
 
-```{r}
+```{r, pipeline}
 main_pipeline <- .%>%
   na.omit() %>%
   mutate(delay_time = actual_departure_time - planned_departure_time,
@@ -74,12 +74,20 @@ main_pipeline <- .%>%
          delay_time = minute(delay_time) + (hour(delay_time)*60) + (second(delay_time)/60),
          delay = case_when(delay_time >= 15 ~ "1",
                            delay_time < 15 ~ "0"),
-         date = paste0(year,"-",month,"-",day_of_month))%>%
-  select(date,quarter,month,day_of_month,day_of_week,hour_of_day,minutes_of_hour,
+         date = paste0(year,"-",month,"-",day_of_month),
+         date = as.Date(date),
+         # flight_number = as.character(flight_number),
+         flight_time = planned_arrival_time - planned_departure_time,
+         flight_time = minute(flight_time) + (hour(flight_time)*60) + (second(flight_time)/60),
+         speed = flight_distance / flight_time)%>%
+  select(date,quarter,month,day_of_month,day_of_week,
+         # hour_of_day,minutes_of_hour,
          planned_departure_local_hour,planned_arrival_local_hour,
          flight_distance,seating_capacity,
          origin,destination,
-         delay,delay_time) %>%
+         # flight_number,
+         delay,delay_time,flight_time,
+         carrier,speed) %>%
   filter(origin %in% airports, destination %in% airports)
 
 # Create the numerical delay sub-pipeline
@@ -97,7 +105,7 @@ class_delay_pipeline <- .%>% main_pipeline %>%
 
 # Prepare weather data to use as features
 
-```{r}
+```{r, top_10_airports}
 ### Check the top 10 origin and destination with the most flight traffic to narrow down the data
 raw_data_tmp <- (raw_data) %>% select(origin,destination) %>% collect()
 tmp1 <- data.frame(table(raw_data_tmp$origin))
@@ -109,7 +117,7 @@ airports <- tmp1 %>%
   pull(Var1)
 ```
 
-```{r, message=FALSE, fig.show='hide', results='hide'}
+```{r, weather_data, message=FALSE, fig.show='hide', results='hide'}
 ### Get the correct data for each airport
 ATL_data_raw <- importNOAA(code = "722190-13874", year = 2017) %>%
   mutate(origin = "ATL")
@@ -140,29 +148,57 @@ weather_pipeline <-  .%>%
   mutate(date = as.Date(date,format = "%y-%m-%d")) %>%
   select(origin,date,
          # latitude,longitude,elev,
-         ws,wd,air_temp,atmos_pres,visibility,dew_point) %>%
-  na.omit()
+         precip_6,
+         ws,wd,air_temp,atmos_pres,visibility,dew_point) 
+# %>%
+#   na.omit()
 
 weather_data <- weather_pipeline(weather_data)
 
+weather_data <- copy_to(dest = sc,
+                       df = weather_data,
+                       overwrite = TRUE)
+
+input_cols_imp <- c("precip_6","ws","wd","air_temp","atmos_pres","visibility","dew_point")
+output_cols_imp <- paste0(input_cols_imp,"_imp")
+weather_data <- ft_imputer(weather_data, input_cols = input_cols_imp, output_cols = output_cols_imp, strategy = "mean")
+
+weather_data <- weather_data %>% collect()
+
+# weather_data <- weather_data %>%
+#   group_by(origin, date) %>%
+#   summarise(across(c(ws,
+#                      # latitude, longitude, elev, 
+#                      wd, air_temp, atmos_pres,
+#                      visibility, dew_point,precip_6), mean))
+
 weather_data <- weather_data %>%
   group_by(origin, date) %>%
-  summarise(across(c(ws,
+  summarise(across(c(ws_imp,
                      # latitude, longitude, elev, 
-                     wd, air_temp, atmos_pres,
-                     visibility, dew_point), mean))
+                     wd_imp, air_temp_imp, atmos_pres_imp,
+                     visibility_imp, dew_point_imp,precip_6_imp), mean))
+
 weather_data2 <- weather_data
 ###
-colnames(weather_data) <- c("origin", "date", "origin_ws", "origin_wd", "origin_air_temp", "origin_atmos_pres", "origin_visibility", "origin_dew_point")
+colnames(weather_data) <- c("origin", "date", "origin_ws", "origin_wd", "origin_air_temp", "origin_atmos_pres", "origin_visibility", "origin_dew_point", "origin_precip_6")
 colnames(weather_data2) <- c("destination", "date", "destination_ws", "destination_wd", 
-                             "destination_air_temp", "destination_atmos_pres", "destination_visibility", "destination_dew_point")
+                             "destination_air_temp", "destination_atmos_pres", "destination_visibility", "destination_dew_point","destination_precip_6")
 ###
 weather_data <- copy_to(dest = sc,
                        df = weather_data,
                        overwrite = TRUE)
+# input_cols_imp <- c("origin_precip_6","origin_ws","origin_wd","origin_air_temp","origin_atmos_pres","origin_visibility","origin_dew_point")
+# output_cols_imp <- paste0(input_cols_imp,"_imp")
+# weather_data <- ft_imputer(weather_data, input_cols = input_cols_imp, output_cols = output_cols_imp, strategy = "mean")
+
 weather_data2 <- copy_to(dest = sc,
                        df = weather_data2,
                        overwrite = TRUE)
+
+# input_cols_imp <- c("destination_precip_6","destination_ws","destination_wd","destination_air_temp","destination_atmos_pres","destination_visibility","destination_dew_point")
+# output_cols_imp <- paste0(input_cols_imp,"_imp")
+# weather_data2 <- ft_imputer(weather_data, input_cols = input_cols_imp, output_cols = output_cols_imp, strategy = "mean")
 ###
 weather_data_h2o <- hc$asH2OFrame(weather_data)
 weather_data_h2o2 <- hc$asH2OFrame(weather_data2)
@@ -174,33 +210,54 @@ weather_data_h2o2 <- hc$asH2OFrame(weather_data2)
 
 Take a sample set of the data to reduce time to train the model.
 
-```{r, message=FALSE}
+```{r, spark_data_split, message=FALSE}
 # Split for classification
-data_size <- 10000
-
+data_size <- 50000
+##########################################################################################################################
 ### Create the train, validation, test split for classification
 class_data <- left_join(class_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) 
-# %>%
-  # select(-origin,-date)
-  # select(-date)
+class_data <- left_join(class_data, 
+                        class_delay_pipeline(raw_data) %>% group_by(origin,date) %>% summarise(count1=n()),
+                        by=c("origin"="origin","date"="date"))
+class_data <- left_join(class_data, 
+                        class_delay_pipeline(raw_data) %>% group_by(destination,date) %>% summarise(count2=n()),
+                        by=c("destination"="destination","date"="date"))
+class_data <- left_join(class_data, 
+                        class_delay_pipeline(raw_data) %>% group_by(origin,carrier,date) %>% summarise(count3=n()),
+                        by=c("origin"="origin","carrier"="carrier","date"="date"))
 class_data <- left_join(class_data, weather_data2,by=c("destination"="destination","date"="date")) %>%
   select(-date)
-numer_data <- left_join(numer_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) 
-# %>%
-  # select(-origin,-date)
-  # select(-date)
-numer_data <- left_join(numer_data, weather_data2,by=c("destination"="destination","date"="date")) 
-
+##########################################################################################################################
+# numer_data <- left_join(numer_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) 
+# numer_data <- left_join(numer_data, 
+#                         numer_delay_pipeline(raw_data) %>% group_by(origin,date) %>% summarise(count1=n()),
+#                         by=c("origin"="origin","date"="date"))
+# numer_data <- left_join(numer_data, 
+#                         numer_delay_pipeline(raw_data) %>% group_by(destination,date) %>% summarise(count2=n()),
+#                         by=c("destination"="destination","date"="date"))
+# numer_data <- left_join(numer_data, 
+#                         numer_delay_pipeline(raw_data) %>% group_by(origin,carrier,date) %>% summarise(count3=n()),
+#                         by=c("origin"="origin","carrier"="carrier","date"="date"))
+# numer_data <- left_join(numer_data, weather_data2,by=c("destination"="destination","date"="date")) %>%
+#   select(-date)
+##########################################################################################################################
 ### Apply one hot encoding to origin and destination
 class_data_tmp <- ft_string_indexer(class_data, input_col = "origin", output_col = "origin_ind")
 class_data_tmp <- ft_string_indexer(class_data_tmp, input_col = "destination", output_col = "destination_ind")
-class_data <- ft_one_hot_encoder(class_data_tmp, input_cols = c("origin_ind","destination_ind"), output_cols = c("origin_out","destination_out")) %>%
-  select(-origin,-destination)
+class_data_tmp <- ft_string_indexer(class_data_tmp, input_col = "carrier", output_col = "carrier_ind")
+class_data <- ft_one_hot_encoder(class_data_tmp, input_cols = c("origin_ind","destination_ind","carrier_ind"), 
+                                 output_cols = c("origin_out","destination_out","carrier_out"))%>%
+  select(-origin,-destination,-carrier)
+class_data <- ft_vector_assembler(class_data,input_cols = c("origin_out","destination_out","carrier_out"),output_col = "one_hot_output")
 ### Apply one hot encoding to origin and destination
-numer_data_tmp <- ft_string_indexer(numer_data, input_col = "origin", output_col = "origin_ind")
-numer_data_tmp <- ft_string_indexer(numer_data_tmp, input_col = "destination", output_col = "destination_ind")
-numer_data <- ft_one_hot_encoder(numer_data_tmp, input_cols = c("origin_ind","destination_ind"), output_cols = c("origin_out","destination_out")) %>%
-  select(-origin,-destination)
+# numer_data_tmp <- ft_string_indexer(numer_data, input_col = "origin", output_col = "origin_ind")
+# numer_data_tmp <- ft_string_indexer(numer_data_tmp, input_col = "destination", output_col = "destination_ind")
+# numer_data_tmp <- ft_string_indexer(numer_data_tmp, input_col = "carrier", output_col = "carrier_ind")
+# numer_data <- ft_one_hot_encoder(numer_data_tmp, input_cols = c("origin_ind","destination_ind","carrier_ind"), 
+#                                  # output_cols = c("origin_out","destination_out","flight_number_out"))
+#                                  output_cols = c("origin_out","destination_out","carrier_out"))%>%
+#   select(-origin,-destination,-carrier)
+# numer_data <- ft_vector_assembler(numer_data,input_cols = c("origin_out","destination_out","carrier_out"),output_col = "one_hot_output")
 ###
 classification_split <- create_train_test_split(data = class_data,
                                                 # data = class_delay_pipeline(raw_data),
@@ -208,57 +265,59 @@ classification_split <- create_train_test_split(data = class_data,
                                                 ratio = 0.8,
                                                 type = "classification")
 train_data <- classification_split$train_data
-# train_data <- left_join(train_data, weather_data,by=c("origin"="origin","date"="date")) %>%
-#   select(-origin,-destination,-date)
-
 test_data <- classification_split$test_data
-# test_data <- left_join(test_data, weather_data,by=c("origin"="origin","date"="date")) %>%
-#   select(-origin,-destination,-date)
-# Split for numerical predictions
-numerical_split <- create_train_test_split(data = numer_data,
-                                           # data = numer_delay_pipeline(raw_data),
-                                           sample_size = data_size,
-                                           ratio = 0.8,
-                                           type = "numerical")
-train_data_regr <- numerical_split$train_data
-# train_data_regr <- left_join(train_data_regr, weather_data,by=c("origin"="origin","date"="date")) %>%
-#   select(-origin,-destination,-date)
-
-test_data_regr <- numerical_split$test_data
-# test_data_regr <- left_join(test_data_regr, weather_data,by=c("origin"="origin","date"="date")) %>%
-#   select(-origin,-destination,-date)
+# numerical_split <- create_train_test_split(data = numer_data,
+#                                            # data = numer_delay_pipeline(raw_data),
+#                                            sample_size = data_size,
+#                                            ratio = 0.8,
+#                                            type = "numerical")
+# train_data_regr <- numerical_split$train_data
+# test_data_regr <- numerical_split$test_data
 ```
 
 Let's glimpse into the train data for classification.
 
-```{r}
+```{r, train_glimpse}
 train_data %>% glimpse()
 ```
 
-Let's glimpse into the train data for numerical prediction.
+<!-- Let's glimpse into the train data for numerical prediction. -->
 
-```{r}
-train_data_regr %>% glimpse()
-```
+<!-- ```{r, train_regr_glimpse} -->
+<!-- train_data_regr %>% glimpse() -->
+<!-- ``` -->
 
 ## Creating the train, validation, and test sets for h2o
 
 Create the train, validation, test, split to use with the h2o framework.
 
-```{r, message=FALSE}
-### Create the train, validation, test split for classification
+```{r, h2o_data_split, message=FALSE}
 class_data <- left_join(class_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) 
-# %>%
-  # select(-origin,-date)
-  # select(-date)
+class_data <- left_join(class_data, 
+                        class_delay_pipeline(raw_data) %>% group_by(origin,date) %>% summarise(count1=n()),
+                        by=c("origin"="origin","date"="date"))
+class_data <- left_join(class_data, 
+                        class_delay_pipeline(raw_data) %>% group_by(destination,date) %>% summarise(count2=n()),
+                        by=c("destination"="destination","date"="date"))
+class_data <- left_join(class_data, 
+                        class_delay_pipeline(raw_data) %>% group_by(origin,carrier,date) %>% summarise(count3=n()),
+                        by=c("origin"="origin","carrier"="carrier","date"="date"))
 class_data <- left_join(class_data, weather_data2,by=c("destination"="destination","date"="date")) %>%
   select(-date)
-numer_data <- left_join(numer_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) 
-# %>%
-  # select(-origin,-date)
-  # select(-date)
-numer_data <- left_join(numer_data, weather_data2,by=c("destination"="destination","date"="date"))  %>%
-  select(-date)
+###
+# numer_data <- left_join(numer_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) 
+# numer_data <- left_join(numer_data, 
+#                         numer_delay_pipeline(raw_data) %>% group_by(origin,date) %>% summarise(count1=n()),
+#                         by=c("origin"="origin","date"="date"))
+# numer_data <- left_join(numer_data, 
+#                         numer_delay_pipeline(raw_data) %>% group_by(destination,date) %>% summarise(count2=n()),
+#                         by=c("destination"="destination","date"="date"))
+# numer_data <- left_join(numer_data, 
+#                         numer_delay_pipeline(raw_data) %>% group_by(origin,carrier,date) %>% summarise(count3=n()),
+#                         by=c("origin"="origin","carrier"="carrier","date"="date"))
+# numer_data <- left_join(numer_data, weather_data2,by=c("destination"="destination","date"="date"))  %>%
+#   select(-date)
+### Create the train, validation, test split for classification
 h2o_classification_split <- create_train_test_split(data = class_data,
                                                     # data = class_delay_pipeline(raw_data),
                                                     sample_size = data_size,
@@ -268,29 +327,17 @@ h2o_classification_split <- create_train_test_split(data = class_data,
 
 train_data_h2o <- h2o_classification_split[[1]]
 valid_data_h2o <- h2o_classification_split[[2]]
-# valid_data_h2o <- h2o.merge(valid_data_h2o, weather_data,by=c("origin"="origin","date"="date")) %>%
-#   select(-origin,-date)
 test_data_h2o  <- h2o_classification_split[[3]]
-# test_data_h2o <- h2o.merge(test_data_h2o, weather_data,by=c("origin"="origin","date"="date")) %>%
-#   select(-origin,-date)
-
 ### Create the train, validation, test split for numerical predictions
-h2o_numerical_split <- create_train_test_split(data = numer_data,
-                                               # data = numer_delay_pipeline(raw_data),
-                                               sample_size = data_size,
-                                               ratio = 0.6,
-                                               type = "h2o_numerical",
-                                               hc = hc)
-
-train_data_regr_h2o <- h2o_numerical_split[[1]]
-# train_data_regr_h2o <- h2o.merge(train_data_regr_h2o, weather_data,by=c("origin"="origin","date"="date")) %>%
-#   select(-origin,-date)
-valid_data_regr_h2o <- h2o_numerical_split[[2]]
-# valid_data_regr_h2o <- h2o.merge(valid_data_regr_h2o, weather_data,by=c("origin"="origin","date"="date")) %>%
-#   select(-origin,-date)
-test_data_regr_h2o  <- h2o_numerical_split[[3]]
-# test_data_regr_h2o <- h2o.merge(test_data_regr_h2o, weather_data,by=c("origin"="origin","date"="date")) %>%
-#   select(-origin,-date)
+# h2o_numerical_split <- create_train_test_split(data = numer_data,
+#                                                # data = numer_delay_pipeline(raw_data),
+#                                                sample_size = data_size,
+#                                                ratio = 0.6,
+#                                                type = "h2o_numerical",
+#                                                hc = hc)
+# train_data_regr_h2o <- h2o_numerical_split[[1]]
+# valid_data_regr_h2o <- h2o_numerical_split[[2]]
+# test_data_regr_h2o  <- h2o_numerical_split[[3]]
 ###########
 rm(raw_data)
 ```
@@ -307,7 +354,7 @@ In this section we will build a logistic regression pipeline and cross-validate 
 
 Below we build a ML pipeline for a logistic regression model to use cross validation as we perform hyper parameter tuning on our model.
 
-```{r}
+```{r, glm_model_cv}
 # Pipeline
 glm_pipeline <- ml_pipeline(sc) %>%
   ft_r_formula(delay ~ .) %>%
@@ -340,7 +387,7 @@ a[order(-a$accuracy),] %>%
 
 Train a logistic regression model using the full training data set and the parameters that rolled out of the cross validation with hyper model parameter tuning.
 
-```{r}
+```{r, glm_final_model}
 ### Train a logistic regression model ###
 glm_tuned_start_time <- Sys.time()
 glm_model <- ml_logistic_regression(train_data, "delay ~ .",
@@ -360,13 +407,13 @@ glm_tuned_result_train %>%
 
 Save the model to be able to reuse it later on predictions.
 
-```{r, message=FALSE}
+```{r, glm_save_model, message=FALSE}
 ml_save(glm_model, "models/glm_model", overwrite = TRUE)
 ```
 
 Make a prediction based on test data and get model performance.
 
-```{r}
+```{r, glm_metrics}
 ### Performance on test set
 glm_tuned_result <- generate_metrics_classification(glm_model,
                                                     "test",
@@ -383,7 +430,7 @@ In this section we will build a decision tree pipeline and cross-validate and hy
 
 ### Building a decision tree pipeline
 
-```{r}
+```{r, tree_model_cv}
 # Pipeline
 tree_pipeline <- ml_pipeline(sc) %>%
   ft_r_formula(delay ~ .) %>%
@@ -416,7 +463,7 @@ a[order(-a$accuracy),] %>%
 
 Train a decision tree model using the train dataset and get model performance on training data.
 
-```{r}
+```{r, tree_final_model}
 ### Train a decision tree model ###
 tree_tuned_start_time <- Sys.time()
 tree_model <- ml_decision_tree_classifier(train_data, 
@@ -435,13 +482,13 @@ tree_tuned_result_train %>%
 
 Save the model to be able to reuse it later on predictions.
 
-```{r, message=FALSE}
+```{r, tree_save_model, message=FALSE}
 ml_save(tree_model, "models/tree_model_classification", overwrite = TRUE)
 ```
 
 Make a prediction based on test data and get model performance.
 
-```{r}
+```{r, tree_metrics}
 ### Performance on test set
 tree_tuned_result <- generate_metrics_classification(tree_model,
                                                     "test",
@@ -458,7 +505,7 @@ In this section we will build a random forest pipeline and cross-validate and hy
 
 ### Building a random forest pipeline
 
-```{r}
+```{r, rf_model_cv}
 # Pipeline
 rf_pipeline <- ml_pipeline(sc) %>%
   ft_r_formula(delay ~ .) %>%
@@ -491,7 +538,7 @@ a[order(-a$accuracy),] %>%
 
 Train a random forest model using the train dataset and get model performance on training data.
 
-```{r}
+```{r, rf_final_model}
 ### Train a decision tree model ###
 rf_tuned_start_time <- Sys.time()
 rf_model <- ml_random_forest_classifier(train_data, 
@@ -511,13 +558,13 @@ rf_tuned_result_train %>%
 
 Save the model to be able to reuse it later on predictions.
 
-```{r, message=FALSE}
+```{r, rf_model_save, message=FALSE}
 ml_save(rf_model, "models/rf_model_classification", overwrite = TRUE)
 ```
 
 Make a prediction based on test data and get model performance.
 
-```{r}
+```{r, rf_model_metrics}
 ### Performance on test set
 rf_tuned_result <- generate_metrics_classification(rf_model,
                                                     "test",
@@ -537,7 +584,7 @@ In this section we will train a gradient boosted machine model using the h2o fra
 
 Define the variables to use in model training, cross validation and hyper parameter tuning.
 
-```{r, message=FALSE, fig.show='hide', results='hide'}
+```{r, h2o_set_x_y, message=FALSE, fig.show='hide', results='hide'}
 y <- "delay"
 x <- setdiff(names(train_data_h2o), y)
 ```
@@ -546,7 +593,7 @@ x <- setdiff(names(train_data_h2o), y)
 
 Perform hyper-parameter tuning to figure out the best value for depth.
 
-```{r, message=FALSE, fig.show='hide', results='hide'}
+```{r, gbm_tune1, message=FALSE, fig.show='hide', results='hide'}
 ### Define the range of depth to tune for
 hyper_params = list( max_depth = seq(1,29,2) )
 
@@ -596,7 +643,7 @@ maxDepth = max(as.numeric(topDepths))
 
 Hyper parameter tune the remaining parameters using random search.
 
-```{r, message=FALSE, fig.show='hide', results='hide'}
+```{r, gbm_tune2, message=FALSE, fig.show='hide', results='hide'}
 hyper_params = list(
   ## restrict the search to the range of max_depth established above
   max_depth = seq(minDepth,maxDepth,1),
@@ -673,7 +720,7 @@ gbm <- h2o.getModel(sortedGrid@model_ids[[1]])
 
 Show the metrics of the model with the thresholds
 
-```{r}
+```{r, gbm_metrics}
 gbm@model$validation_metrics@metrics$max_criteria_and_metric_scores[c(1,4:7),] %>%
   mutate(threshold = round(threshold,3),
          value = round(value,3)) %>%
@@ -686,7 +733,7 @@ gbm@model$validation_metrics@metrics$max_criteria_and_metric_scores[c(1,4:7),] %
 
 Build a model on the whole training set:
 
-```{r, message=FALSE, fig.show='hide', results='hide'}
+```{r, gbm_final_model, message=FALSE, fig.show='hide', results='hide'}
 final_gbm_model <- do.call(h2o.gbm,
         ## update parameters in place
         {
@@ -702,7 +749,7 @@ final_gbm_model <- do.call(h2o.gbm,
 
 Model metrics of the final tuned model:
 
-```{r}
+```{r, gbm_tuned_metrics}
 gbm_metrics_final <- generate_metrics_classification(final_gbm_model,
                                                     "h2o_classification_train")
 gbm_metrics_final %>%
@@ -712,7 +759,7 @@ gbm_metrics_final %>%
 
 Save the model:
 
-```{r, message=FALSE, fig.show='hide', results='hide'}
+```{r, gbm_save_model, message=FALSE, fig.show='hide', results='hide'}
 h2o.saveModel(gbm, "models/h2o/gbm_classification.csv", force=TRUE)
 ```
 
@@ -724,7 +771,7 @@ In this section we will train, hyper parameter tune, and cross validate a deep l
 
 Hyper parameter tuning with grid search
 
-```{r, message=FALSE, fig.show='hide', results='hide'}
+```{r, dl_tune, message=FALSE, fig.show='hide', results='hide'}
 hyper_params <- list(
   hidden=list(c(32,32,32),c(64,64)),
   input_dropout_ratio=c(0,0.05),
@@ -768,7 +815,7 @@ best_dl_model <- h2o.getModel(grid@model_ids[[1]])
 
 Show the metrics of the model with the thresholds
 
-```{r}
+```{r, dl_metrics}
 best_dl_model@model$validation_metrics@metrics$max_criteria_and_metric_scores[c(1,4:7),] %>%
   mutate(threshold = round(threshold,3),
          value = round(value,3)) %>%
@@ -781,7 +828,7 @@ best_dl_model@model$validation_metrics@metrics$max_criteria_and_metric_scores[c(
 
 Build a model on the whole training set:
 
-```{r, message=FALSE, fig.show='hide', results='hide'}
+```{r, dl_final_model, message=FALSE, fig.show='hide', results='hide'}
 final_dl_model <- do.call(h2o.deeplearning,
         ## update parameters in place
         {
@@ -797,7 +844,7 @@ final_dl_model <- do.call(h2o.deeplearning,
 
 Model metrics of the final tuned model:
 
-```{r}
+```{r, dl_metrics_final}
 gbm_metrics_final <- generate_metrics_classification(final_dl_model,
                                                     "h2o_classification_train")
 gbm_metrics_final %>%
@@ -807,91 +854,91 @@ gbm_metrics_final %>%
 
 Save the model:
 
-```{r, message=FALSE, fig.show='hide', results='hide'}
+```{r, dl_save_model, message=FALSE, fig.show='hide', results='hide'}
 h2o.saveModel(best_dl_model, "models/h2o/dl_classification.csv", force=TRUE)
 ```
 
-# Numerical prediction of the delay time
+<!-- # Numerical prediction of the delay time -->
 
-In this section we will build and evaluate different machine learning models to predict the amount of delay an inbound flight of the United States will have.
+<!-- In this section we will build and evaluate different machine learning models to predict the amount of delay an inbound flight of the United States will have. -->
 
-## Random Forest Model
+<!-- ## Random Forest Model -->
 
-In this section we will build a random forest pipeline and cross-validate and hyper-parameter tune a random forest model for the numerical delay prediction.
+<!-- In this section we will build a random forest pipeline and cross-validate and hyper-parameter tune a random forest model for the numerical delay prediction. -->
 
-### Building a random forest pipeline
+<!-- ### Building a random forest pipeline -->
 
-```{r}
-# Pipeline
-rf_pipeline_regression <- ml_pipeline(sc) %>%
-    ft_r_formula(delay_time ~ .) %>%
-    ml_random_forest_regressor()
+<!-- ```{r, rf_numer_cv} -->
+<!-- # Pipeline -->
+<!-- rf_pipeline_regression <- ml_pipeline(sc) %>% -->
+<!--     ft_r_formula(delay_time ~ .) %>% -->
+<!--     ml_random_forest_regressor() -->
 
-# Grid
-grid <- list(random_forest = list(max_depth = c(1,3,5,7,10), num_trees = c(1,3,5,7,10,25,50)))
+<!-- # Grid -->
+<!-- grid <- list(random_forest = list(max_depth = c(1,3,5,7,10), num_trees = c(1,3,5,7,10,25,50))) -->
 
-# Cross validate model
-rf_cv <- cross_validator(sc = sc,
-                         data = train_data_regr,
-                         pipeline = rf_pipeline_regression,
-                         grid = grid,
-                         type = "numerical",
-                         folds = 4,
-                         seed = 2018)
+<!-- # Cross validate model -->
+<!-- rf_cv <- cross_validator(sc = sc, -->
+<!--                          data = train_data_regr, -->
+<!--                          pipeline = rf_pipeline_regression, -->
+<!--                          grid = grid, -->
+<!--                          type = "numerical", -->
+<!--                          folds = 4, -->
+<!--                          seed = 2018) -->
 
-# Get model results
-a <- rf_cv$all_results
-rf_cv_best_result_regr <- rf_cv$best_result 
-rf_cv_result_regr <- rf_cv_best_result_regr[which.max(rf_cv_best_result_regr$r2),"r2"]
-rf_train_time_regr <- rf_cv$train_time
-a[order(-a$r2),] %>% 
-  head(5) %>%
-  kbl() %>%
-  kable_minimal()
-```
+<!-- # Get model results -->
+<!-- a <- rf_cv$all_results -->
+<!-- rf_cv_best_result_regr <- rf_cv$best_result  -->
+<!-- rf_cv_result_regr <- rf_cv_best_result_regr[which.max(rf_cv_best_result_regr$r2),"r2"] -->
+<!-- rf_train_time_regr <- rf_cv$train_time -->
+<!-- a[order(-a$r2),] %>%  -->
+<!--   head(5) %>% -->
+<!--   kbl() %>% -->
+<!--   kable_minimal() -->
+<!-- ``` -->
 
-### Train a random forest model
+<!-- ### Train a random forest model -->
 
-Train a random forest model using the train dataset and get model performance on training data.
+<!-- Train a random forest model using the train dataset and get model performance on training data. -->
 
-```{r}
-### Train a random forest model ###
-rf_regr_tuned_start_time <- Sys.time()
-rf_model_regr <- ml_random_forest_regressor(train_data_regr,
-                                        "delay_time ~ .",
-                                        num_trees = rf_cv_best_result_regr[which.max(rf_cv_best_result_regr$r2),"num_trees_1"],
-                                        max_depth = rf_cv_best_result_regr[which.max(rf_cv_best_result_regr$r2),"max_depth_1"])
-rf_regr_tuned_end_time <- Sys.time()
-rf_regr_tuned_train_time <- rf_regr_tuned_end_time - rf_regr_tuned_start_time
+<!-- ```{r, rf_numer_final} -->
+<!-- ### Train a random forest model ### -->
+<!-- rf_regr_tuned_start_time <- Sys.time() -->
+<!-- rf_model_regr <- ml_random_forest_regressor(train_data_regr, -->
+<!--                                         "delay_time ~ .", -->
+<!--                                         num_trees = rf_cv_best_result_regr[which.max(rf_cv_best_result_regr$r2),"num_trees_1"], -->
+<!--                                         max_depth = rf_cv_best_result_regr[which.max(rf_cv_best_result_regr$r2),"max_depth_1"]) -->
+<!-- rf_regr_tuned_end_time <- Sys.time() -->
+<!-- rf_regr_tuned_train_time <- rf_regr_tuned_end_time - rf_regr_tuned_start_time -->
 
-### Performance on train set
-augment_value <- augment(rf_model_regr) %>% collect()
-metric_flights <- metric_set(rsq, mae, rmse)
+<!-- ### Performance on train set -->
+<!-- augment_value <- augment(rf_model_regr) %>% collect() -->
+<!-- metric_flights <- metric_set(rsq, mae, rmse) -->
 
-rf_regr_tuned_result_train <- metric_flights(augment_value, truth = delay_time, estimate = .prediction)
+<!-- rf_regr_tuned_result_train <- metric_flights(augment_value, truth = delay_time, estimate = .prediction) -->
 
-rf_regr_tuned_result_train %>% 
-  kbl() %>%
-  kable_minimal()
-```
+<!-- rf_regr_tuned_result_train %>%  -->
+<!--   kbl() %>% -->
+<!--   kable_minimal() -->
+<!-- ``` -->
 
-Save the model to be able to reuse it later on predictions.
+<!-- Save the model to be able to reuse it later on predictions. -->
 
-```{r, message=FALSE}
-ml_save(rf_model_regr, "models/rf_model_regression", overwrite = TRUE)
-```
+<!-- ```{r, rf_numer_save_model, message=FALSE} -->
+<!-- ml_save(rf_model_regr, "models/rf_model_regression", overwrite = TRUE) -->
+<!-- ``` -->
 
-Make a prediction based on test data and get model performance.
+<!-- Make a prediction based on test data and get model performance. -->
 
-```{r}
-### Performance on test set
-rf_regr_tuned_result_test <- ml_predict(rf_model_regr,test_data_regr) %>%
-  ml_metrics_regression(truth = delay_time, estimate = prediction)
+<!-- ```{r, rf_numer_final_metrics} -->
+<!-- ### Performance on test set -->
+<!-- rf_regr_tuned_result_test <- ml_predict(rf_model_regr,test_data_regr) %>% -->
+<!--   ml_metrics_regression(truth = delay_time, estimate = prediction) -->
 
-rf_regr_tuned_result_test %>% 
-  kbl() %>%
-  kable_minimal()
-```
+<!-- rf_regr_tuned_result_test %>%  -->
+<!--   kbl() %>% -->
+<!--   kable_minimal() -->
+<!-- ``` -->
 
 # Summary of results
 
@@ -899,7 +946,7 @@ rf_regr_tuned_result_test %>%
 
 ### Classification
 
-```{r}
+```{r, classification_cv_results}
 model_type <- c("glm", "decision tree", "random forest")
 train_time <- c(glm_train_time, tree_train_time, rf_train_time)
 cv_results <- c(glm_cv_result, tree_cv_result, rf_cv_result)
@@ -911,19 +958,19 @@ classification_results %>%
   kable_minimal()
 ```
 
-### Numerical prediction
+<!-- ### Numerical prediction -->
 
-```{r}
-model_type <- c("random forest")
-train_time <- c(rf_train_time_regr)
-cv_results <- c(rf_cv_result_regr)
+<!-- ```{r, numerical_cv_results} -->
+<!-- model_type <- c("random forest") -->
+<!-- train_time <- c(rf_train_time_regr) -->
+<!-- cv_results <- c(rf_cv_result_regr) -->
 
-numerical_prediction_results <- data.frame(model_type, train_time, cv_results)
-colnames(numerical_prediction_results) <- c("model type", "train time", "cv r-squared")
-numerical_prediction_results %>% 
-  kbl() %>%
-  kable_minimal()
-```
+<!-- numerical_prediction_results <- data.frame(model_type, train_time, cv_results) -->
+<!-- colnames(numerical_prediction_results) <- c("model type", "train time", "cv r-squared") -->
+<!-- numerical_prediction_results %>%  -->
+<!--   kbl() %>% -->
+<!--   kable_minimal() -->
+<!-- ``` -->
 
 ## Final tuned models
 
@@ -933,7 +980,7 @@ numerical_prediction_results %>%
 
 Summary of model metrics on the train set
 
-```{r, echo=FALSE}
+```{r, class_results_spark_train, echo=FALSE}
 model_type <- c("glm", "decision tree", "random forest")
 train_time <- round(c(glm_tuned_train_time, tree_tuned_train_time, rf_tuned_train_time),3)
 
@@ -974,7 +1021,7 @@ classification_results_train %>%
 
 Summary of model metrics on the test set
 
-```{r, echo=FALSE}
+```{r, class_results_spark_test, echo=FALSE}
 accuracy_results_test <- c(glm_tuned_result[1,]$value, tree_tuned_result[1,]$value, rf_tuned_result[1,]$value)
 recall_results_test <- c(glm_tuned_result[2,]$value, tree_tuned_result[2,]$value, rf_tuned_result[2,]$value)
 precision_results_test <- c(glm_tuned_result[3,]$value, tree_tuned_result[3,]$value, rf_tuned_result[3,]$value)
@@ -1009,26 +1056,26 @@ classification_results_train %>%
 
 #### Models build using h2o
 
-```{r, echo=FALSE, message=FALSE, fig.show='hide', results='hide'}
+```{r, h2o_results1, echo=FALSE, message=FALSE, fig.show='hide', results='hide'}
 gbm_metrics_train <- generate_metrics_classification(model = final_gbm_model,
                                                     type = "h2o_classification_train")
 colnames(gbm_metrics_train) <- c("metric_names", "GBM_train")
 ```
 
-```{r, echo=FALSE, message=FALSE, fig.show='hide', results='hide'}
+```{r, h2o_results2, echo=FALSE, message=FALSE, fig.show='hide', results='hide'}
 gbm_metrics_test <- generate_metrics_classification(model = gbm,
                                                     type = "h2o_classification_test",
                                                     test_data = test_data_h2o,
                                                     sc = sc)
 ```
 
-```{r, echo=FALSE, message=FALSE, fig.show='hide', results='hide'}
+```{r, h2o_results3, echo=FALSE, message=FALSE, fig.show='hide', results='hide'}
 dl_metrics_train <- generate_metrics_classification(model = final_dl_model,
                                                     type = "h2o_classification_train")
 colnames(dl_metrics_train) <- c("metric_names", "DL_train")
 ```
 
-```{r, echo=FALSE, message=FALSE, fig.show='hide', results='hide'}
+```{r, h2o_results4, echo=FALSE, message=FALSE, fig.show='hide', results='hide'}
 dl_metrics_test <- generate_metrics_classification(model = best_dl_model,
                                                     type = "h2o_classification_test",
                                                     test_data = test_data_h2o,
@@ -1037,7 +1084,7 @@ dl_metrics_test <- generate_metrics_classification(model = best_dl_model,
 
 Model metrics on the entire train set for the models trained using the h2o framework:
 
-```{r, echo=FALSE}
+```{r, h2o_results5, echo=FALSE}
 final_summary_train <- gbm_metrics_train %>%
   append(data.frame(dl_metrics_train$DL_train))
 
@@ -1051,7 +1098,7 @@ final_summary_train %>%
 
 Model metrics on the test set for the models trained using the h2o framework:
 
-```{r, echo=FALSE}
+```{r, h2o_results6, echo=FALSE}
 final_summary_test <- gbm_metrics_test %>%
   append(data.frame(dl_metrics_test$value))
 
@@ -1063,45 +1110,46 @@ colnames(final_summary_test) <- c("metric_names", "GBM_test", "DL_test")
 final_summary_test %>% 
   kbl() %>%
   kable_minimal()
-```
-
-### Numerical prediction
-
-Summary of model metrics on the train set
-
-```{r, echo=FALSE}
-model_type <- c("random forest")
-train_time <- c(rf_regr_tuned_train_time)
-r2_results_train <- c(rf_regr_tuned_result_train[1,]$.estimate)
-mae_results_train <- c(rf_regr_tuned_result_train[2,]$.estimate)
-rmse_results_train <- c(rf_regr_tuned_result_train[3,]$.estimate)
-
-numerical_prediction_results <- data.frame(model_type, train_time, r2_results_train, mae_results_train, rmse_results_train)
-colnames(numerical_prediction_results) <- c("model type", "train time", "R2", "MAE", "RMSE")
-
-numerical_prediction_results %>% 
-  kbl() %>%
-  kable_minimal()
-```
-
-Summary of model metrics on the test set
-
-```{r, echo=FALSE}
-r2_results_test <- c(rf_regr_tuned_result_test[2,]$.estimate)
-mae_results_test <- c(rf_regr_tuned_result_test[3,]$.estimate)
-rmse_results_test <- c(rf_regr_tuned_result_test[1,]$.estimate)
-
-numerical_prediction_results <- data.frame(model_type, train_time, r2_results_test, mae_results_test, rmse_results_test)
-colnames(numerical_prediction_results) <- c("model type", "train time", "R2", "MAE", "RMSE")
-
-numerical_prediction_results %>% 
-  kbl() %>%
-  kable_minimal()
 markdown_end_time <- Sys.time()
 ```
 
+<!-- ### Numerical prediction -->
+
+<!-- Summary of model metrics on the train set -->
+
+<!-- ```{r, numerical_results_train, echo=FALSE} -->
+<!-- model_type <- c("random forest") -->
+<!-- train_time <- c(rf_regr_tuned_train_time) -->
+<!-- r2_results_train <- c(rf_regr_tuned_result_train[1,]$.estimate) -->
+<!-- mae_results_train <- c(rf_regr_tuned_result_train[2,]$.estimate) -->
+<!-- rmse_results_train <- c(rf_regr_tuned_result_train[3,]$.estimate) -->
+
+<!-- numerical_prediction_results <- data.frame(model_type, train_time, r2_results_train, mae_results_train, rmse_results_train) -->
+<!-- colnames(numerical_prediction_results) <- c("model type", "train time", "R2", "MAE", "RMSE") -->
+
+<!-- numerical_prediction_results %>%  -->
+<!--   kbl() %>% -->
+<!--   kable_minimal() -->
+<!-- ``` -->
+
+<!-- Summary of model metrics on the test set -->
+
+<!-- ```{r, numerical_results_test, echo=FALSE} -->
+<!-- r2_results_test <- c(rf_regr_tuned_result_test[2,]$.estimate) -->
+<!-- mae_results_test <- c(rf_regr_tuned_result_test[3,]$.estimate) -->
+<!-- rmse_results_test <- c(rf_regr_tuned_result_test[1,]$.estimate) -->
+
+<!-- numerical_prediction_results <- data.frame(model_type, train_time, r2_results_test, mae_results_test, rmse_results_test) -->
+<!-- colnames(numerical_prediction_results) <- c("model type", "train time", "R2", "MAE", "RMSE") -->
+
+<!-- numerical_prediction_results %>%  -->
+<!--   kbl() %>% -->
+<!--   kable_minimal() -->
+<!-- markdown_end_time <- Sys.time() -->
+<!-- ``` -->
+
 The total time to knit this markdown is:
 
-```{r}
+```{r, total_knit_time}
 markdown_end_time - markdown_start_time
 ```
