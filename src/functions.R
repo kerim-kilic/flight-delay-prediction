@@ -12,7 +12,7 @@ generate_metrics_classification <- function(model,type,test_data, sc)
       mutate(predicted_label = .predicted_label) %>%
       select(-.predicted_label)
     ###
-    data <- augment(glm_model) %>%
+    data <- augment(model) %>%
       mutate(prediction = as.numeric(.predicted_label),
              label = as.numeric(delay)) %>%
       select(-.predicted_label, -delay)
@@ -244,7 +244,7 @@ cross_validator <- function(sc,
   start_time <- Sys.time()
   cv_model <- ml_fit(cv, data)
   end_time <- Sys.time()
-  # Measure the time it takes to cross validate glm model
+  # Measure the time it takes to cross validate model
   train_time <- end_time - start_time
   
   cv_results <- cv_model$avg_metrics_df

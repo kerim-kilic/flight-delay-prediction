@@ -79,16 +79,40 @@ main_pipeline <- .%>%
          # flight_number = as.character(flight_number),
          flight_time = planned_arrival_time - planned_departure_time,
          flight_time = minute(flight_time) + (hour(flight_time)*60) + (second(flight_time)/60),
-         speed = flight_distance / flight_time)%>%
-  select(date,quarter,month,day_of_month,day_of_week,
+         speed = flight_distance / flight_time,
+         planned_departure_time = minute(planned_departure_time) + (hour(planned_departure_time)*60) + (second(planned_departure_time)/60),
+         planned_departure_time = sin((2*pi*planned_departure_time)/1440),
+         planned_arrival_time = minute(planned_arrival_time) + (hour(planned_arrival_time)*60) + (second(planned_arrival_time)/60),
+         planned_arrival_time = sin((2*pi*planned_arrival_time)/1440),
+         month = sin((2*pi*month)/12),
+         hour_of_day = sin((2*pi*hour_of_day)/24),
+         day_of_month = sin((2*pi*day_of_month)/31),
+         day_of_week = sin((2*pi*day_of_week)/7))%>%
+  # select(date,quarter,month,day_of_month,day_of_week,
+  #        # hour_of_day,minutes_of_hour,
+  #        planned_departure_local_hour,planned_arrival_local_hour,
+  #        flight_distance,seating_capacity,
+  #        origin,destination,
+  #        # flight_number,
+  #        delay,delay_time,flight_time,
+  #        carrier,speed) %>%
+  # filter(origin %in% airports, destination %in% airports) %>%
+    filter(origin %in% airports | destination %in% airports) %>%
+    select(date,
+           # quarter,
+           month,
+           hour_of_day,
+           day_of_month,day_of_week,
          # hour_of_day,minutes_of_hour,
-         planned_departure_local_hour,planned_arrival_local_hour,
+         # planned_departure_local_hour,
+         # planned_arrival_local_hour,
          flight_distance,seating_capacity,
          origin,destination,
          # flight_number,
          delay,delay_time,flight_time,
-         carrier,speed) %>%
-  filter(origin %in% airports, destination %in% airports)
+         carrier,speed,
+         planned_arrival_time,
+         planned_departure_time)
 
 # Create the numerical delay sub-pipeline
 # Sum the individual types of delay to a total delay_time.
@@ -107,7 +131,7 @@ class_delay_pipeline <- .%>% main_pipeline %>%
 
 ```{r, top_10_airports}
 ### Check the top 10 origin and destination with the most flight traffic to narrow down the data
-raw_data_tmp <- (raw_data) %>% select(origin,destination) %>% collect()
+raw_data_tmp <- raw_data %>% select(origin,destination) %>% collect()
 tmp1 <- data.frame(table(raw_data_tmp$origin))
 tmp2 <- data.frame(table(raw_data_tmp$destination))
 tmp1 <- tmp1[order(-tmp1$Freq),] %>% head(10)
@@ -115,9 +139,14 @@ tmp2 <- tmp2[order(-tmp2$Freq),] %>% head(10)
 airports <- tmp1 %>% 
   mutate(Var1 = as.character(Var1)) %>%
   pull(Var1)
+rm(raw_data_tmp)
+rm(tmp1,tmp2)
+airports <- c("LAX")
 ```
 
 ```{r, weather_data, message=FALSE, fig.show='hide', results='hide'}
+if(!file.exists("data/origin_weather_data.csv") | !file.exists("data/destination_weather_data.csv"))
+{
 ### Get the correct data for each airport
 ATL_data_raw <- importNOAA(code = "722190-13874", year = 2017) %>%
   mutate(origin = "ATL")
@@ -139,39 +168,31 @@ SEA_data_raw <- importNOAA(code = "727930-24233", year = 2017) %>%
   mutate(origin = "SEA")
 MSP_data_raw <- importNOAA(code = "726580-14922", year = 2017) %>%
   mutate(origin = "MSP")
-###
+### Create a single dataframe
 weather_data <- rbind(ATL_data_raw,DEN_data_raw,ORD_data_raw,LAX_data_raw,
                       DFW_data_raw,SFO_data_raw,PHX_data_raw,LAS_data_raw,
                       SEA_data_raw,MSP_data_raw)
-###
+### Define data pipeline for weather data
 weather_pipeline <-  .%>%
   mutate(date = as.Date(date,format = "%y-%m-%d")) %>%
   select(origin,date,
          # latitude,longitude,elev,
          precip_6,
          ws,wd,air_temp,atmos_pres,visibility,dew_point) 
-# %>%
-#   na.omit()
 
+
+### Initial weather dataset
 weather_data <- weather_pipeline(weather_data)
-
 weather_data <- copy_to(dest = sc,
                        df = weather_data,
                        overwrite = TRUE)
-
+### Perform imputation on missing values
 input_cols_imp <- c("precip_6","ws","wd","air_temp","atmos_pres","visibility","dew_point")
 output_cols_imp <- paste0(input_cols_imp,"_imp")
 weather_data <- ft_imputer(weather_data, input_cols = input_cols_imp, output_cols = output_cols_imp, strategy = "mean")
 
+### Calculate average value per day
 weather_data <- weather_data %>% collect()
-
-# weather_data <- weather_data %>%
-#   group_by(origin, date) %>%
-#   summarise(across(c(ws,
-#                      # latitude, longitude, elev, 
-#                      wd, air_temp, atmos_pres,
-#                      visibility, dew_point,precip_6), mean))
-
 weather_data <- weather_data %>%
   group_by(origin, date) %>%
   summarise(across(c(ws_imp,
@@ -179,27 +200,27 @@ weather_data <- weather_data %>%
                      wd_imp, air_temp_imp, atmos_pres_imp,
                      visibility_imp, dew_point_imp,precip_6_imp), mean))
 
+### One dataframe for the origin weather data and one for the destination weather data
 weather_data2 <- weather_data
-###
 colnames(weather_data) <- c("origin", "date", "origin_ws", "origin_wd", "origin_air_temp", "origin_atmos_pres", "origin_visibility", "origin_dew_point", "origin_precip_6")
 colnames(weather_data2) <- c("destination", "date", "destination_ws", "destination_wd", 
                              "destination_air_temp", "destination_atmos_pres", "destination_visibility", "destination_dew_point","destination_precip_6")
-###
-weather_data <- copy_to(dest = sc,
-                       df = weather_data,
-                       overwrite = TRUE)
-# input_cols_imp <- c("origin_precip_6","origin_ws","origin_wd","origin_air_temp","origin_atmos_pres","origin_visibility","origin_dew_point")
-# output_cols_imp <- paste0(input_cols_imp,"_imp")
-# weather_data <- ft_imputer(weather_data, input_cols = input_cols_imp, output_cols = output_cols_imp, strategy = "mean")
-
-weather_data2 <- copy_to(dest = sc,
-                       df = weather_data2,
-                       overwrite = TRUE)
-
-# input_cols_imp <- c("destination_precip_6","destination_ws","destination_wd","destination_air_temp","destination_atmos_pres","destination_visibility","destination_dew_point")
-# output_cols_imp <- paste0(input_cols_imp,"_imp")
-# weather_data2 <- ft_imputer(weather_data, input_cols = input_cols_imp, output_cols = output_cols_imp, strategy = "mean")
-###
+# write.csv(weather_data,"data/origin_weather_data.csv")
+fwrite(weather_data,file = "data/origin_weather_data.csv") 
+# write.csv(weather_data2,"data/destination_weather_data.csv")
+fwrite(weather_data2,file = "data/destination_weather_data.csv")
+}
+weather_data <- spark_read_csv(sc,"data/origin_weather_data.csv",)
+weather_data2 <- spark_read_csv(sc,"data/destination_weather_data.csv")
+# ### Copy weather data into spark
+# weather_data <- copy_to(dest = sc,
+#                        df = weather_data,
+#                        overwrite = TRUE)
+# 
+# weather_data2 <- copy_to(dest = sc,
+#                        df = weather_data2,
+#                        overwrite = TRUE)
+### Copy weather data into h2o
 weather_data_h2o <- hc$asH2OFrame(weather_data)
 weather_data_h2o2 <- hc$asH2OFrame(weather_data2)
 ```
@@ -215,49 +236,80 @@ Take a sample set of the data to reduce time to train the model.
 data_size <- 50000
 ##########################################################################################################################
 ### Create the train, validation, test split for classification
+# Join the weather data
 class_data <- left_join(class_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) 
+# Join the total departure flights per day per airport
 class_data <- left_join(class_data, 
-                        class_delay_pipeline(raw_data) %>% group_by(origin,date) %>% summarise(count1=n()),
+                        class_delay_pipeline(raw_data) %>% group_by(origin,date) %>% summarise(total_departure_flights=n()),
                         by=c("origin"="origin","date"="date"))
-class_data <- left_join(class_data, 
-                        class_delay_pipeline(raw_data) %>% group_by(destination,date) %>% summarise(count2=n()),
+# Join the total arrival flights per day per airport
+class_data <- left_join(class_data,
+                        class_delay_pipeline(raw_data) %>% group_by(destination,date) %>% summarise(total_arrival_flights=n()),
                         by=c("destination"="destination","date"="date"))
+# Flag to indicate if it is a arriving or departing flight
+class_data <- class_data %>%
+  mutate(arrival_flight = case_when(destination == "LAX" ~ "1",
+                                    origin == "LAX" ~ "0"))
+# Join the total departing passengers per day per airport based on seating_capacity
 class_data <- left_join(class_data, 
-                        class_delay_pipeline(raw_data) %>% group_by(origin,carrier,date) %>% summarise(count3=n()),
-                        by=c("origin"="origin","carrier"="carrier","date"="date"))
-class_data <- left_join(class_data, weather_data2,by=c("destination"="destination","date"="date")) %>%
+                        class_delay_pipeline(raw_data) %>% group_by(origin,date) %>% summarise(total_departing_passengers=sum(seating_capacity)),
+                        by=c("origin"="origin","date"="date"))
+# Join the total arriving passengers per day per airport based on seating_capacity
+class_data <- left_join(class_data, 
+                        class_delay_pipeline(raw_data) %>% group_by(destination,date) %>% summarise(total_arriving_passengers=sum(seating_capacity)),
+                        by=c("destination"="destination","date"="date"))
+# Calculate th delay status flag for the departure airport
+avg_delays <- main_pipeline(raw_data) %>% 
+  group_by(origin,date) %>% 
+  summarise(across(c(delay_time),mean)) %>% 
+  collect() %>%
+  arrange(origin,date) %>%
+  mutate(yesterday = lag(delay_time)) %>%
+  mutate(delay_status_departure = case_when(lag(delay_time) >= 15 ~ "1", lag(delay_time) < 15 ~ "0")) %>%
+  select(-delay_time,-yesterday)
+# Join with the main data
+avg_delays <- copy_to(dest = sc,
+                      df = avg_delays,
+                      overwrite = TRUE)
+class_data <- left_join(class_data, avg_delays,by=c("origin"="origin","date"="date")) %>%
+  na.omit() 
+# Calculate the delay status flag for the arrival airport
+avg_delays <- main_pipeline(raw_data) %>% 
+  group_by(destination,date) %>% 
+  summarise(across(c(delay_time),mean)) %>% 
+  collect() %>%
+  arrange(destination,date) %>%
+  mutate(yesterday = lag(delay_time)) %>%
+  mutate(delay_status_arrival = case_when(lag(delay_time) >= 15 ~ "1", lag(delay_time) < 15 ~ "0")) %>%
+  select(-delay_time,-yesterday)
+# Join with the main data
+avg_delays <- copy_to(dest = sc,
+                      df = avg_delays,
+                      overwrite = TRUE)
+class_data <- left_join(class_data, avg_delays,by=c("destination"="destination","date"="date")) %>%
+  na.omit() %>%
   select(-date)
-##########################################################################################################################
-# numer_data <- left_join(numer_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) 
-# numer_data <- left_join(numer_data, 
-#                         numer_delay_pipeline(raw_data) %>% group_by(origin,date) %>% summarise(count1=n()),
-#                         by=c("origin"="origin","date"="date"))
-# numer_data <- left_join(numer_data, 
-#                         numer_delay_pipeline(raw_data) %>% group_by(destination,date) %>% summarise(count2=n()),
-#                         by=c("destination"="destination","date"="date"))
-# numer_data <- left_join(numer_data, 
-#                         numer_delay_pipeline(raw_data) %>% group_by(origin,carrier,date) %>% summarise(count3=n()),
-#                         by=c("origin"="origin","carrier"="carrier","date"="date"))
-# numer_data <- left_join(numer_data, weather_data2,by=c("destination"="destination","date"="date")) %>%
-#   select(-date)
-##########################################################################################################################
-### Apply one hot encoding to origin and destination
-class_data_tmp <- ft_string_indexer(class_data, input_col = "origin", output_col = "origin_ind")
-class_data_tmp <- ft_string_indexer(class_data_tmp, input_col = "destination", output_col = "destination_ind")
-class_data_tmp <- ft_string_indexer(class_data_tmp, input_col = "carrier", output_col = "carrier_ind")
-class_data <- ft_one_hot_encoder(class_data_tmp, input_cols = c("origin_ind","destination_ind","carrier_ind"), 
-                                 output_cols = c("origin_out","destination_out","carrier_out"))%>%
+
+class_data <- class_data %>%
   select(-origin,-destination,-carrier)
-class_data <- ft_vector_assembler(class_data,input_cols = c("origin_out","destination_out","carrier_out"),output_col = "one_hot_output")
+
+class_data_h2o <- class_data
+##########################################################################################################################
 ### Apply one hot encoding to origin and destination
-# numer_data_tmp <- ft_string_indexer(numer_data, input_col = "origin", output_col = "origin_ind")
-# numer_data_tmp <- ft_string_indexer(numer_data_tmp, input_col = "destination", output_col = "destination_ind")
-# numer_data_tmp <- ft_string_indexer(numer_data_tmp, input_col = "carrier", output_col = "carrier_ind")
-# numer_data <- ft_one_hot_encoder(numer_data_tmp, input_cols = c("origin_ind","destination_ind","carrier_ind"), 
-#                                  # output_cols = c("origin_out","destination_out","flight_number_out"))
-#                                  output_cols = c("origin_out","destination_out","carrier_out"))%>%
-#   select(-origin,-destination,-carrier)
-# numer_data <- ft_vector_assembler(numer_data,input_cols = c("origin_out","destination_out","carrier_out"),output_col = "one_hot_output")
+# class_data_tmp <- ft_string_indexer(class_data, input_col = "origin", output_col = "origin_ind")
+# class_data_tmp <- ft_string_indexer(class_data_tmp, input_col = "destination", output_col = "destination_ind")
+# class_data_tmp <- ft_string_indexer(class_data, input_col = "carrier", output_col = "carrier_ind")
+
+class_data <- ft_string_indexer(class_data, input_col = "delay_status_departure", output_col = "delay_status_departure_ind")
+class_data <- ft_string_indexer(class_data, input_col = "delay_status_arrival", output_col = "delay_status_arrival_ind")
+class_data <- ft_string_indexer(class_data, input_col = "arrival_flight", output_col = "arrival_flight_ind")
+class_data <- ft_one_hot_encoder(class_data, 
+                                 input_cols = c("delay_status_departure_ind","delay_status_arrival_ind","arrival_flight_ind"),
+                                 output_cols = c("delay_status_departure_out","delay_status_arrival_out","arrival_flight_out"))%>%
+  select(-delay_status_departure,-delay_status_arrival,-arrival_flight)
+class_data <- ft_vector_assembler(class_data,
+                                  input_cols = c("delay_status_departure_out","delay_status_arrival_out","arrival_flight_out"),
+                                  output_col = "one_hot_output")
 ###
 classification_split <- create_train_test_split(data = class_data,
                                                 # data = class_delay_pipeline(raw_data),
@@ -292,33 +344,9 @@ train_data %>% glimpse()
 Create the train, validation, test, split to use with the h2o framework.
 
 ```{r, h2o_data_split, message=FALSE}
-class_data <- left_join(class_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) 
-class_data <- left_join(class_data, 
-                        class_delay_pipeline(raw_data) %>% group_by(origin,date) %>% summarise(count1=n()),
-                        by=c("origin"="origin","date"="date"))
-class_data <- left_join(class_data, 
-                        class_delay_pipeline(raw_data) %>% group_by(destination,date) %>% summarise(count2=n()),
-                        by=c("destination"="destination","date"="date"))
-class_data <- left_join(class_data, 
-                        class_delay_pipeline(raw_data) %>% group_by(origin,carrier,date) %>% summarise(count3=n()),
-                        by=c("origin"="origin","carrier"="carrier","date"="date"))
-class_data <- left_join(class_data, weather_data2,by=c("destination"="destination","date"="date")) %>%
-  select(-date)
-###
-# numer_data <- left_join(numer_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date")) 
-# numer_data <- left_join(numer_data, 
-#                         numer_delay_pipeline(raw_data) %>% group_by(origin,date) %>% summarise(count1=n()),
-#                         by=c("origin"="origin","date"="date"))
-# numer_data <- left_join(numer_data, 
-#                         numer_delay_pipeline(raw_data) %>% group_by(destination,date) %>% summarise(count2=n()),
-#                         by=c("destination"="destination","date"="date"))
-# numer_data <- left_join(numer_data, 
-#                         numer_delay_pipeline(raw_data) %>% group_by(origin,carrier,date) %>% summarise(count3=n()),
-#                         by=c("origin"="origin","carrier"="carrier","date"="date"))
-# numer_data <- left_join(numer_data, weather_data2,by=c("destination"="destination","date"="date"))  %>%
-#   select(-date)
+data_size <- 50000
 ### Create the train, validation, test split for classification
-h2o_classification_split <- create_train_test_split(data = class_data,
+h2o_classification_split <- create_train_test_split(data = class_data_h2o,
                                                     # data = class_delay_pipeline(raw_data),
                                                     sample_size = data_size,
                                                     ratio = 0.6,
@@ -339,7 +367,16 @@ test_data_h2o  <- h2o_classification_split[[3]]
 # valid_data_regr_h2o <- h2o_numerical_split[[2]]
 # test_data_regr_h2o  <- h2o_numerical_split[[3]]
 ###########
-rm(raw_data)
+# rm(raw_data)
+# rm(avg_delays,class_data,class_data_tmp)
+# rm(weather_data,weather_data2,weather_data_h2o,weather_data_h2o2)
+y <- "delay"
+x <- setdiff(names(train_data_h2o), y)
+```
+
+
+```{r}
+train_data_h2o 
 ```
 
 # Classification of flight delays
@@ -806,7 +843,8 @@ grid <- h2o.grid(
   ### can help improve stability for Rectifier
   max_w2=10,                    
   hyper_params=hyper_params,
-  categorical_encoding = "auto"
+  categorical_encoding = "auto",
+  max_runtime_secs = 3600
 )
 ## Sort the grid models by AUC
 sortedGrid <- h2o.getGrid("dl_grid", sort_by = "auc", decreasing = TRUE)
@@ -845,9 +883,9 @@ final_dl_model <- do.call(h2o.deeplearning,
 Model metrics of the final tuned model:
 
 ```{r, dl_metrics_final}
-gbm_metrics_final <- generate_metrics_classification(final_dl_model,
+dl_metrics_final <- generate_metrics_classification(final_dl_model,
                                                     "h2o_classification_train")
-gbm_metrics_final %>%
+dl_metrics_final %>%
   kbl() %>%
   kable_minimal()
 ```
@@ -857,6 +895,206 @@ Save the model:
 ```{r, dl_save_model, message=FALSE, fig.show='hide', results='hide'}
 h2o.saveModel(best_dl_model, "models/h2o/dl_classification.csv", force=TRUE)
 ```
+
+
+
+<!-- Uncomment for XGBoost model -->
+## Exploring XGBoost
+
+```{r}
+xgb <- h2o.xgboost(x = x,
+                   y = y,
+                   training_frame = train_data_h2o,
+                   validation_frame = valid_data_h2o,
+                   booster = "dart",
+                   normalize_type = "tree",
+                   seed = 1903)
+generate_metrics_classification(model=xgb,type="h2o_classification_test",test_data = test_data_h2o,sc=sc)
+```
+
+Perform hyper-parameter tuning to figure out the best value for depth.
+
+```{r, gbm_tune1, message=FALSE, fig.show='hide', results='hide'}
+### Define the range of depth to tune for
+hyper_params = list( max_depth = seq(1,29,2) )
+
+grid <- h2o.grid(
+  ## hyper parameters
+  hyper_params = hyper_params,
+  ## full Cartesian hyper-parameter search
+  search_criteria = list(strategy = "Cartesian"),
+  ## which algorithm to run
+  algorithm="xgboost",
+  ## identifier for the grid, to later retrieve it
+  grid_id="depth_grid",
+  ## standard model parameters
+  x = x,
+  y = y,
+  training_frame = train_data_h2o,
+  validation_frame = valid_data_h2o,
+  ## more trees is better if the learning rate is small enough
+  ## here, use "more than enough" trees - we have early stopping
+  ntrees = 10000,
+  ## smaller learning rate is better
+  ## since we have learning_rate_annealing, we can afford to start with a bigger learning rate
+  # learn_rate = 0.05,
+  ## learning rate annealing: learning_rate shrinks by 1% after every tree
+  ## (use 1.00 to disable, but then lower the learning_rate)
+  # learn_rate_annealing = 0.99,
+  ## sample 80% of rows per tree
+  # sample_rate = 0.8,
+  ## sample 80% of columns per split
+  # col_sample_rate = 0.8,
+  ## fix a random number generator seed for reproducibility
+  seed = 1234,
+  ## early stopping once the validation AUC doesn't improve by at least 0.01% for 5 consecutive scoring events
+  stopping_rounds = 5,
+  stopping_tolerance = 1e-2,
+  stopping_metric = "AUC",
+  ## score every 10 trees to make early stopping reproducible (it depends on the scoring interval)
+  score_tree_interval = 10,
+  categorical_encoding = "auto"
+)
+### Get the grid and sort decreasing by AUC
+sortedGrid <- h2o.getGrid("depth_grid", sort_by="auc", decreasing = TRUE)
+topDepths = sortedGrid@summary_table$max_depth[1:5]
+minDepth = min(as.numeric(topDepths))
+maxDepth = max(as.numeric(topDepths))
+```
+
+Hyper parameter tune the remaining parameters using random search.
+
+```{r, gbm_tune2, message=FALSE, fig.show='hide', results='hide'}
+hyper_params = list(
+  ## restrict the search to the range of max_depth established above
+  # max_depth = seq(minDepth,maxDepth,1),
+  # Custom settings
+  max_depth = seq(1,29,2),
+  eta = seq(0,1,0.1),
+  gamma = 5,
+  ## search a large space of row sampling rates per tree
+  sample_rate = seq(0.2,1,0.01),
+  ## search a large space of column sampling rates per split
+  col_sample_rate = seq(0.2,1,0.01),
+  ## search a large space of column sampling rates per tree
+  col_sample_rate_per_tree = seq(0.2,1,0.01),
+  ## search a large space of how column sampling per split should change as a function of the depth of the split
+  # col_sample_rate_change_per_level = seq(0.9,1.1,0.01),
+  ## search a large space of the number of min rows in a terminal node
+  min_rows = 2^seq(0,log2(nrow(train_data_h2o))-1,1),
+  ## search a large space of the number of bins for split-finding for continuous and integer columns
+  # nbins = 2^seq(4,10,1),
+  ## search a large space of the number of bins for split-finding for categorical columns
+  # nbins_cats = 2^seq(4,12,1),
+  ## search a few minimum required relative error improvement thresholds for a split to happen
+  min_split_improvement = c(0,1e-8,1e-6,1e-4)
+  ## try all histogram types (QuantilesGlobal and RoundRobin are good for numeric columns with outliers)
+  # histogram_type = c("UniformAdaptive","QuantilesGlobal","RoundRobin")
+)
+search_criteria = list(
+  ## Random grid search
+  strategy = "RandomDiscrete",
+  ## limit the runtime to 60 minutes
+  max_runtime_secs = 3600,
+  ## build no more than 100 models
+  max_models = 100,
+  ## random number generator seed to make sampling of parameter combinations reproducible
+  seed = 1234,
+  ## early stopping once the leaderboard of the top 5 models is converged to 0.1% relative difference
+  stopping_rounds = 5,
+  stopping_metric = "AUC",
+  stopping_tolerance = 1e-3
+)
+grid <- h2o.grid(
+  ## hyper parameters
+  hyper_params = hyper_params,
+  ## hyper-parameter search configuration (see above)
+  search_criteria = search_criteria,
+  ## which algorithm to run
+  algorithm = "xgboost",
+  ## identifier for the grid, to later retrieve it
+  grid_id = "final_grid",
+  ## standard model parameters
+  x = x,
+  y = y,
+  training_frame = train_data_h2o,
+  validation_frame = valid_data_h2o,
+  ## more trees is better if the learning rate is small enough
+  ## use "more than enough" trees - we have early stopping
+  ntrees = 10000,
+  ## smaller learning rate is better
+  ## since we have learning_rate_annealing, we can afford to start with a bigger learning rate
+  # learn_rate = 0.05,
+  ## learning rate annealing: learning_rate shrinks by 1% after every tree
+  ## (use 1.00 to disable, but then lower the learning_rate)
+  # learn_rate_annealing = 0.99,
+  ## early stopping based on timeout (no model should take more than 1 hour - modify as needed)
+  max_runtime_secs = 3600,
+  ## early stopping once the validation AUC doesn't improve by at least 0.01% for 5 consecutive scoring events
+  stopping_rounds = 5, stopping_tolerance = 1e-2, stopping_metric = "AUC",
+  ## score every 10 trees to make early stopping reproducible (it depends on the scoring interval)
+  score_tree_interval = 10,
+  ## base random number generator seed for each model (automatically gets incremented internally for each model)
+  seed = 1234,
+  categorical_encoding = "auto"
+)
+## Sort the grid models by AUC and select the best performing model
+sortedGrid <- h2o.getGrid("final_grid", sort_by = "auc", decreasing = TRUE)
+xgb <- h2o.getModel(sortedGrid@model_ids[[1]])
+```
+
+### Train the tuned model using the whole training set
+
+Build a model on the whole training set:
+
+```{r, gbm_final_model, message=FALSE, fig.show='hide', results='hide'}
+final_xgb_model <- do.call(h2o.xgboost,
+        ## update parameters in place
+        {
+          p <- xgb@parameters
+          p$model_id = NULL          ## do not overwrite the original grid model
+          p$training_frame = h2o.rbind(train_data_h2o, valid_data_h2o)      ## use the full dataset
+          p$validation_frame = NULL  ## no validation frame
+          p$nfolds = 4               ## cross-validation
+          p
+        }
+)
+```
+
+Model metrics of the final tuned model:
+
+```{r, gbm_tuned_metrics}
+xgb_metrics_final <- generate_metrics_classification(final_xgb_model,
+                                                    "h2o_classification_train")
+xgb_metrics_final %>%
+  kbl() %>%
+  kable_minimal()
+```
+
+Save the model:
+
+```{r, gbm_save_model, message=FALSE, fig.show='hide', results='hide'}
+h2o.saveModel(xgb, "models/h2o/gbm_classification.csv", force=TRUE)
+```
+
+```{r, gbm_tuned_metrics}
+xgb_metrics_final_test <- generate_metrics_classification(model = final_xgb_model,
+                                                          type = "h2o_classification_test",
+                                                          test_data = test_data_h2o,
+                                                          sc = sc)
+xgb_metrics_final_test %>%
+  kbl() %>%
+  kable_minimal()
+
+tmp <- h2o.varimp(final_xgb_model)
+```
+
+```{r}
+# Test PCA
+
+```
+
+
 
 <!-- # Numerical prediction of the delay time -->
 
