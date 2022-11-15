@@ -28,24 +28,33 @@ library(rsparkling)
 library(worldmet)
 ```
 
-# Initialize spark and h2o 
+# Initialize spark, h2o and read in the raw data
 
-## Initialize spark and read in flights data
+## Initialize spark and h2o
 
-```{r, spark_setup}
+```{r, spark_h2o_setup}
 ### Check if spark installation exists, if not install correct version
 if(!spark_install_find("3.3.0")$installed)
 {
   spark_install(version = "3.3.0")
 }
-
+### Initialize spark
 spark_config <- spark_config()
 spark_config$'sparklyr.shell.driver-memory' <- "12G"
 
 sc <- spark_connect(master = "local",
                     config = spark_config,
                     version = "3.3.0")
+### Initialize h2o
+h2oConf <- rsparkling::H2OConf()
+hc <- H2OContext.getOrCreate(h2oConf)
+```
 
+## Read in raw data
+
+Let's read in the raw flight data of 2017 and glimpse into the different variables.
+
+```{r, read_raw_data}
 ### Check if csv of the data file exists, if not create one.
 if(!file.exists("data/flights_2017.csv"))
 {
@@ -57,11 +66,10 @@ raw_data <- spark_read_csv(sc,"data/flights_2017.csv")
 raw_data %>% glimpse()
 ```
 
-## Initialize h2o 
+Let's check the total number of rows in the data set.
 
-```{r, h2o_setup, message=FALSE, fig.show='hide', results='hide'}
-h2oConf <- rsparkling::H2OConf()
-hc <- H2OContext.getOrCreate(h2oConf)
+```{r, raw_data_rows}
+sdf_nrow(raw_data)
 ```
 
 # Create datacleaning pipeline
@@ -93,32 +101,29 @@ main_pipeline <- .%>%
          planned_departure_local_hour)
 
 # Create the numerical delay sub-pipeline
-# Sum the individual types of delay to a total delay_time.
-# Remove individual delays
 numer_delay_pipeline <- .%>% main_pipeline %>%
   select(-delay)
 
 # Create the classification sub-pipeline
-# Remove the individual delays
 class_delay_pipeline <- .%>% main_pipeline %>%
   select(-delay_time) %>%
   group_by(delay)
 
 # Pipeline to add one-hot-encoding:
 # Origin, Destination, Carrier, planned_arrival_hour, planned_departure_hour
+one_hot_features <- c("origin", "destination", "carrier", "planned_arrival_local_hour", "planned_departure_local_hour")
+one_hot_features_ind <- paste0(one_hot_features,"_ind")
+one_hot_features_out <- paste0(one_hot_features,"_out")
+
 one_hot_encoding_pipeline <- . %>% 
-  ft_string_indexer(input_col = "origin", output_col = "origin_ind") %>%
-  ft_string_indexer(input_col = "destination", output_col = "destination_ind") %>%
-  ft_string_indexer(input_col = "carrier", output_col = "carrier_ind") %>%
-  ft_string_indexer(input_col = "planned_arrival_local_hour", output_col = "planned_arrival_local_hour_ind") %>%
-  ft_string_indexer(input_col = "planned_departure_local_hour", output_col = "planned_departure_local_hour_ind") %>%
-  ft_one_hot_encoder(input_cols = c("origin_ind","destination_ind","carrier_ind",
-                                    "planned_arrival_local_hour_ind","planned_departure_local_hour_ind"),
-                     output_cols = c("origin_out","destination_out","carrier_out",
-                                     "planned_arrival_local_hour_out","planned_departure_local_hour_out"))%>%
+  ft_string_indexer(input_col = one_hot_features[1], output_col = one_hot_features_ind[1]) %>%
+  ft_string_indexer(input_col = one_hot_features[2], output_col = one_hot_features_ind[2]) %>%
+  ft_string_indexer(input_col = one_hot_features[3], output_col = one_hot_features_ind[3]) %>%
+  ft_string_indexer(input_col = one_hot_features[4], output_col = one_hot_features_ind[4]) %>%
+  ft_string_indexer(input_col = one_hot_features[5], output_col = one_hot_features_ind[5]) %>%
+  ft_one_hot_encoder(input_cols = one_hot_features_ind, output_cols = one_hot_features_out)%>%
   select(-origin,-destination,-carrier,-planned_arrival_local_hour,-planned_departure_local_hour) %>%
-  ft_vector_assembler(input_cols = c("origin_out","destination_out","carrier_out",
-                                     "planned_arrival_local_hour_out","planned_departure_local_hour_out"),
+  ft_vector_assembler(input_cols = one_hot_features_out,
                       output_col = "one_hot_output")
 
 # Final classification pipeline for Spark and h2o models
@@ -126,7 +131,9 @@ spark_class_pipeline <- . %>% one_hot_encoding_pipeline
 h2o_class_pipeline <- . %>% class_delay_pipeline
 ```
 
-# Prepare weather data to use as features
+# Top 10 airports
+
+Check the top 10 airports with the most departure and arrival flights, to narrow down the data set further.
 
 ```{r, top_10_airports}
 ### Check the top 10 origin and destination with the most flight traffic to narrow down the data
@@ -140,80 +147,31 @@ airports <- tmp1 %>%
   pull(Var1)
 rm(raw_data_tmp)
 rm(tmp1,tmp2)
-# airports <- c("LAX")
 ```
+
+# Prepare weather data to use as features
+
+Get the weather data that corresponds to the top 10 airports.
 
 ```{r, weather_data, message=FALSE, fig.show='hide', results='hide'}
 if(!file.exists("data/origin_weather_data.csv") | !file.exists("data/destination_weather_data.csv"))
 {
-### Get the correct data for each airport
-ATL_data_raw <- importNOAA(code = "722190-13874", year = 2017) %>%
-  mutate(origin = "ATL")
-DEN_data_raw <- importNOAA(code = "725650-03017", year = 2017) %>%
-  mutate(origin = "DEN")
-ORD_data_raw <- importNOAA(code = "725300-94846", year = 2017) %>%
-  mutate(origin = "ORD")
-LAX_data_raw <- importNOAA(code = "722950-23174", year = 2017) %>%
-  mutate(origin = "LAX")
-DFW_data_raw <- importNOAA(code = "722590-03927", year = 2017) %>%
-  mutate(origin = "DFW")
-SFO_data_raw <- importNOAA(code = "724940-23234", year = 2017) %>%
-  mutate(origin = "SFO")
-PHX_data_raw <- importNOAA(code = "722780-23183", year = 2017) %>%
-  mutate(origin = "PHX")
-LAS_data_raw <- importNOAA(code = "723860-23169", year = 2017) %>%
-  mutate(origin = "LAS")
-SEA_data_raw <- importNOAA(code = "727930-24233", year = 2017) %>%
-  mutate(origin = "SEA")
-MSP_data_raw <- importNOAA(code = "726580-14922", year = 2017) %>%
-  mutate(origin = "MSP")
-### Create a single dataframe
-weather_data <- rbind(ATL_data_raw,DEN_data_raw,ORD_data_raw,LAX_data_raw,
-                      DFW_data_raw,SFO_data_raw,PHX_data_raw,LAS_data_raw,
-                      SEA_data_raw,MSP_data_raw)
-### Define data pipeline for weather data
-weather_pipeline <-  .%>%
-  mutate(date = as.Date(date,format = "%y-%m-%d")) %>%
-  select(origin,date,
-         # latitude,longitude,elev,
-         precip_6,
-         ws,wd,air_temp,atmos_pres,visibility,dew_point) 
-
-
-### Initial weather dataset
-weather_data <- weather_pipeline(weather_data)
-weather_data <- copy_to(dest = sc,
-                       df = weather_data,
-                       overwrite = TRUE)
-### Perform imputation on missing values
-input_cols_imp <- c("precip_6","ws","wd","air_temp","atmos_pres","visibility","dew_point")
-output_cols_imp <- paste0(input_cols_imp,"_imp")
-weather_data <- ft_imputer(weather_data, input_cols = input_cols_imp, output_cols = output_cols_imp, strategy = "mean")
-
-### Calculate average value per day
-weather_data <- weather_data %>% collect()
-weather_data <- weather_data %>%
-  group_by(origin, date) %>%
-  summarise(across(c(ws_imp,
-                     # latitude, longitude, elev, 
-                     wd_imp, air_temp_imp, atmos_pres_imp,
-                     visibility_imp, dew_point_imp,precip_6_imp), mean))
-
-### One dataframe for the origin weather data and one for the destination weather data
-weather_data2 <- weather_data
-colnames(weather_data) <- c("origin", "date", "origin_ws", "origin_wd", "origin_air_temp", "origin_atmos_pres", "origin_visibility", "origin_dew_point", "origin_precip_6")
-colnames(weather_data2) <- c("destination", "date", "destination_ws", "destination_wd", 
-                             "destination_air_temp", "destination_atmos_pres", "destination_visibility", "destination_dew_point","destination_precip_6")
-# write.csv(weather_data,"data/origin_weather_data.csv")
-fwrite(weather_data,file = "data/origin_weather_data.csv") 
-# write.csv(weather_data2,"data/destination_weather_data.csv")
-fwrite(weather_data2,file = "data/destination_weather_data.csv")
+  get_weather_data(sc)
 }
-weather_data <- spark_read_csv(sc,"data/origin_weather_data.csv",)
+weather_data <- spark_read_csv(sc,"data/origin_weather_data.csv")
 weather_data2 <- spark_read_csv(sc,"data/destination_weather_data.csv")
-### Copy weather data into h2o
-weather_data_h2o <- hc$asH2OFrame(weather_data)
-weather_data_h2o2 <- hc$asH2OFrame(weather_data2)
+```
+
+Glimpse into the weather data of the origin airports.
+
+```{r, origin_weather_data_glimpse}
+weather_data %>% glimpse()
+```
+
+Glimpse into the weather data of the destination airports.
+
+```{r, destination_weather_data_glimpse}
+weather_data2 %>% glimpse()
 ```
 
 # Splitting data in train and test sets
@@ -244,7 +202,9 @@ class_data <- left_join(class_data,
 ## Join the total arriving passengers per day per airport based on seating_capacity
 class_data <- left_join(class_data,
                        class_delay_pipeline(raw_data) %>% group_by(destination,date,planned_arrival_local_hour) %>% summarise(total_arriving_passengers=sum(seating_capacity)),
-                        by=c("destination"="destination","date"="date", "planned_arrival_local_hour" = "planned_arrival_local_hour")) %>%
+                        by=c("destination"="destination","date"="date", "planned_arrival_local_hour" = "planned_arrival_local_hour")) 
+
+class_data <- left_join(class_data, weather_data2,by=c("destination"="destination","date"="date")) %>%
   select(-date)
 
 ###
@@ -256,7 +216,7 @@ train_data <- classification_split$train_data
 test_data <- classification_split$test_data
 ```
 
-Let's glimpse into the train data for classification.
+Let's glimpse into the train data for classification for spark.
 
 ```{r, train_glimpse}
 train_data %>% glimpse()
@@ -270,7 +230,6 @@ Create the train, validation, test, split to use with the h2o framework.
 data_size <- 50000
 ### Create the train, validation, test split for classification
 h2o_classification_split <- create_train_test_split(data = h2o_class_pipeline(raw_data),
-                                                    # data = class_data_h2o,
                                                     sample_size = data_size,
                                                     ratio = 0.6,
                                                     type = "h2o_classification",
@@ -282,11 +241,6 @@ test_data_h2o  <- h2o_classification_split[[3]]
 
 y <- "delay"
 x <- setdiff(names(train_data_h2o), y)
-```
-
-
-```{r}
-train_data_h2o 
 ```
 
 # Classification of flight delays

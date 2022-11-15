@@ -266,3 +266,69 @@ cross_validator <- function(sc,
   
   return(final_cv_results)
 }
+
+### Function to get the weather data from the top 10 airports
+
+get_weather_data <- function(sc)
+{
+  ### Get the correct data for each airport
+  ATL_data_raw <- importNOAA(code = "722190-13874", year = 2017) %>%
+    mutate(origin = "ATL")
+  DEN_data_raw <- importNOAA(code = "725650-03017", year = 2017) %>%
+    mutate(origin = "DEN")
+  ORD_data_raw <- importNOAA(code = "725300-94846", year = 2017) %>%
+    mutate(origin = "ORD")
+  LAX_data_raw <- importNOAA(code = "722950-23174", year = 2017) %>%
+    mutate(origin = "LAX")
+  DFW_data_raw <- importNOAA(code = "722590-03927", year = 2017) %>%
+    mutate(origin = "DFW")
+  SFO_data_raw <- importNOAA(code = "724940-23234", year = 2017) %>%
+    mutate(origin = "SFO")
+  PHX_data_raw <- importNOAA(code = "722780-23183", year = 2017) %>%
+    mutate(origin = "PHX")
+  LAS_data_raw <- importNOAA(code = "723860-23169", year = 2017) %>%
+    mutate(origin = "LAS")
+  SEA_data_raw <- importNOAA(code = "727930-24233", year = 2017) %>%
+    mutate(origin = "SEA")
+  MSP_data_raw <- importNOAA(code = "726580-14922", year = 2017) %>%
+    mutate(origin = "MSP")
+  ### Create a single dataframe
+  weather_data <- rbind(ATL_data_raw,DEN_data_raw,ORD_data_raw,LAX_data_raw,
+                        DFW_data_raw,SFO_data_raw,PHX_data_raw,LAS_data_raw,
+                        SEA_data_raw,MSP_data_raw)
+  ### Define data pipeline for weather data
+  weather_pipeline <-  .%>%
+    mutate(date = as.Date(date,format = "%y-%m-%d")) %>%
+    select(origin,date,
+           # latitude,longitude,elev,
+           precip_6,
+           ws,wd,air_temp,atmos_pres,visibility,dew_point) 
+  
+  
+  ### Initial weather dataset
+  weather_data <- weather_pipeline(weather_data)
+  weather_data <- copy_to(dest = sc,
+                          df = weather_data,
+                          overwrite = TRUE)
+  ### Perform imputation on missing values
+  input_cols_imp <- c("precip_6","ws","wd","air_temp","atmos_pres","visibility","dew_point")
+  output_cols_imp <- paste0(input_cols_imp,"_imp")
+  weather_data <- ft_imputer(weather_data, input_cols = input_cols_imp, output_cols = output_cols_imp, strategy = "mean")
+  
+  ### Calculate average value per day
+  weather_data <- weather_data %>% collect()
+  weather_data <- weather_data %>%
+    group_by(origin, date) %>%
+    summarise(across(c(ws_imp,
+                       # latitude, longitude, elev, 
+                       wd_imp, air_temp_imp, atmos_pres_imp,
+                       visibility_imp, dew_point_imp,precip_6_imp), mean))
+  
+  ### One dataframe for the origin weather data and one for the destination weather data
+  weather_data2 <- weather_data
+  colnames(weather_data) <- c("origin", "date", "origin_ws", "origin_wd", "origin_air_temp", "origin_atmos_pres", "origin_visibility", "origin_dew_point", "origin_precip_6")
+  colnames(weather_data2) <- c("destination", "date", "destination_ws", "destination_wd", 
+                               "destination_air_temp", "destination_atmos_pres", "destination_visibility", "destination_dew_point","destination_precip_6")
+  fwrite(weather_data,file = "data/origin_weather_data.csv") 
+  fwrite(weather_data2,file = "data/destination_weather_data.csv")
+}
