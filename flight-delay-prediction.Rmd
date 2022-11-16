@@ -88,11 +88,11 @@ main_pipeline <- .%>%
          speed = flight_distance / flight_time,
          planned_arrival_local_hour = as.character(planned_arrival_local_hour),
          planned_departure_local_hour = as.character(planned_departure_local_hour)) %>%
-    filter(origin %in% airports , destination %in% airports) %>%
-    select(date,
-           quarter,
-           month,
-           day_of_month,day_of_week,
+  filter(origin %in% airports , destination %in% airports) %>%
+  select(date,
+         quarter,
+         month,
+         day_of_month,day_of_week,
          flight_distance,seating_capacity,
          origin,destination,
          delay,delay_time,flight_time,
@@ -126,9 +126,28 @@ one_hot_encoding_pipeline <- . %>%
   ft_vector_assembler(input_cols = one_hot_features_out,
                       output_col = "one_hot_output")
 
+adding_extra_features <- . %>%
+  ### Join the weather data of the origin airport
+  left_join(weather_data,by=c("origin"="origin","date"="date")) %>%
+  ### Join the total departure flights per hour per day per airport
+  left_join(., class_delay_pipeline(raw_data) %>% group_by(origin,date,planned_departure_local_hour) %>% summarise(total_departure_flights=n()),
+            by = c("origin"="origin", "date"="date", "planned_departure_local_hour"="planned_departure_local_hour")) %>%
+  ### Join the total arrival flights per hour per day per airport
+  left_join(., class_delay_pipeline(raw_data) %>% group_by(destination,date,planned_arrival_local_hour) %>% summarise(total_arrival_flights=n()),
+            by = c("destination"="destination", "date"="date", "planned_arrival_local_hour"="planned_arrival_local_hour")) %>%
+  ### Join the total departing passengers per hour per day per airport
+  left_join(., class_delay_pipeline(raw_data) %>% group_by(origin,date,planned_departure_local_hour) %>% summarise(total_departing_passengers=sum(seating_capacity)),
+            by = c("origin"="origin", "date"="date", "planned_departure_local_hour"="planned_departure_local_hour")) %>%
+  ### Join the total arriving passengers per hour per day per airport
+  left_join(., class_delay_pipeline(raw_data) %>% group_by(destination,date,planned_arrival_local_hour) %>% summarise(total_arriving_passengers=sum(seating_capacity)),
+            by = c("destination"="destination", "date"="date", "planned_arrival_local_hour"="planned_arrival_local_hour")) %>%
+  ### Join the weather data of the destination airport
+  left_join(., weather_data2,by=c("destination"="destination","date"="date")) %>%
+  select(-date)
+
 # Final classification pipeline for Spark and h2o models
-spark_class_pipeline <- . %>% one_hot_encoding_pipeline
-h2o_class_pipeline <- . %>% class_delay_pipeline
+spark_class_pipeline <- . %>% class_delay_pipeline %>% adding_extra_features %>% one_hot_encoding_pipeline
+h2o_class_pipeline <- . %>% class_delay_pipeline %>% adding_extra_features
 ```
 
 # Top 10 airports
@@ -185,30 +204,7 @@ Take a sample set of the data to reduce time to train the model.
 data_size <- 50000
 ##########################################################################################################################
 #### Create the train, validation, test split for classification
-### Join the weather data
-class_data <- left_join(class_delay_pipeline(raw_data), weather_data,by=c("origin"="origin","date"="date"))
-## Join the total departure flights per hour per day per airport
-class_data <- left_join(class_data,
-                        class_delay_pipeline(raw_data) %>% group_by(origin,date,planned_departure_local_hour) %>% summarise(total_departure_flights=n()),
-                        by=c("origin"="origin","date"="date", "planned_departure_local_hour" = "planned_departure_local_hour"))
-## Join the total arrival flights per day per airport
-class_data <- left_join(class_data,
-                        class_delay_pipeline(raw_data) %>% group_by(destination,date,planned_arrival_local_hour) %>% summarise(total_arrival_flights=n()),
-                        by=c("destination"="destination","date"="date", "planned_arrival_local_hour" = "planned_arrival_local_hour"))
-## Flag to indicate if it is a arriving or departing flight
-class_data <- left_join(class_data,
-                        class_delay_pipeline(raw_data) %>% group_by(origin,date,planned_departure_local_hour) %>% summarise(total_departing_passengers=sum(seating_capacity)),
-                        by=c("origin"="origin","date"="date", "planned_departure_local_hour" = "planned_departure_local_hour"))
-## Join the total arriving passengers per day per airport based on seating_capacity
-class_data <- left_join(class_data,
-                       class_delay_pipeline(raw_data) %>% group_by(destination,date,planned_arrival_local_hour) %>% summarise(total_arriving_passengers=sum(seating_capacity)),
-                        by=c("destination"="destination","date"="date", "planned_arrival_local_hour" = "planned_arrival_local_hour")) 
-
-class_data <- left_join(class_data, weather_data2,by=c("destination"="destination","date"="date")) %>%
-  select(-date)
-
-###
-classification_split <- create_train_test_split(data = spark_class_pipeline(class_data),
+classification_split <- create_train_test_split(data = spark_class_pipeline(raw_data),
                                                 sample_size = data_size,
                                                 ratio = 0.8,
                                                 type = "classification")
@@ -560,6 +556,7 @@ gbm@model$validation_metrics@metrics$max_criteria_and_metric_scores[c(1,4:7),] %
 Build a model on the whole training set:
 
 ```{r, gbm_final_model, message=FALSE, fig.show='hide', results='hide'}
+gbm_tuned_start_time <- Sys.time()
 final_gbm_model <- do.call(h2o.gbm,
         ## update parameters in place
         {
@@ -571,14 +568,29 @@ final_gbm_model <- do.call(h2o.gbm,
           p
         }
 )
+gbm_tuned_end_time <- Sys.time()
+gbm_tuned_train_time <- gbm_tuned_end_time - gbm_tuned_start_time
 ```
 
 Model metrics of the final tuned model:
 
-```{r, gbm_tuned_metrics}
-gbm_metrics_final <- generate_metrics_classification(final_gbm_model,
-                                                    "h2o_classification_train")
-gbm_metrics_final %>%
+```{r, gbm_tuned_metrics_train}
+gbm_metrics_final_train <- generate_metrics_classification(final_gbm_model,
+                                                           "h2o_classification_train")
+
+gbm_metrics_final_train %>%
+  kbl() %>%
+  kable_minimal()
+```
+
+Model metrics of the final tuned model on the test set:
+
+```{r, gbm_tuned_metrics_test}
+gbm_metrics_final_test <- generate_metrics_classification(model = final_gbm_model,
+                                                          type = "h2o_classification_test",
+                                                          test_data = test_data_h2o,
+                                                          sc = sc)
+gbm_metrics_final_test %>%
   kbl() %>%
   kable_minimal()
 ```
@@ -656,6 +668,7 @@ best_dl_model@model$validation_metrics@metrics$max_criteria_and_metric_scores[c(
 Build a model on the whole training set:
 
 ```{r, dl_final_model, message=FALSE, fig.show='hide', results='hide'}
+dl_tuned_start_time <- Sys.time()
 final_dl_model <- do.call(h2o.deeplearning,
         ## update parameters in place
         {
@@ -667,14 +680,28 @@ final_dl_model <- do.call(h2o.deeplearning,
           p
         }
 )
+dl_tuned_end_time <- Sys.time()
+dl_tuned_train_time <- dl_tuned_end_time - dl_tuned_start_time
 ```
 
 Model metrics of the final tuned model:
 
-```{r, dl_metrics_final}
-dl_metrics_final <- generate_metrics_classification(final_dl_model,
-                                                    "h2o_classification_train")
-dl_metrics_final %>%
+```{r, dl_metrics_final_train}
+dl_metrics_final_train <- generate_metrics_classification(final_dl_model,
+                                                          "h2o_classification_train")
+dl_metrics_final_train %>%
+  kbl() %>%
+  kable_minimal()
+```
+
+Model metrics of the final tuned model on the test set:
+
+```{r, dl_metrics_final_test}
+dl_metrics_final_test <- generate_metrics_classification(model = final_dl_model,
+                                                          type = "h2o_classification_test",
+                                                          test_data = test_data_h2o,
+                                                          sc = sc)
+dl_metrics_final_test %>%
   kbl() %>%
   kable_minimal()
 ```
@@ -687,68 +714,57 @@ h2o.saveModel(best_dl_model, "models/h2o/dl_classification.csv", force=TRUE)
 
 # Summary of results
 
-## Cross validation
-
-### Classification
-
-```{r, classification_cv_results}
-model_type <- c("glm", 
-                # "decision tree", 
-                "random forest")
-train_time <- c(glm_train_time, 
-                # tree_train_time, 
-                rf_train_time)
-cv_results <- c(glm_cv_result, 
-                # tree_cv_result, 
-                rf_cv_result)
-
-classification_results <- data.frame(model_type, train_time, cv_results)
-colnames(classification_results) <- c("model type", "train time", "cv accuracy")
-classification_results %>% 
-  kbl() %>%
-  kable_minimal()
-```
-
-## Final tuned models
-
-### Classification
-
-#### Models build using spark
-
 Summary of model metrics on the train set
 
 ```{r, class_results_spark_train, echo=FALSE}
 model_type <- c("glm", 
-                # "decision tree", 
-                "random forest")
+                "random forest",
+                "gbm",
+                "deep learning")
 train_time <- round(c(glm_tuned_train_time, 
-                      # tree_tuned_train_time, 
-                      rf_tuned_train_time),3)
+                      rf_tuned_train_time,
+                      gbm_tuned_train_time,
+                      dl_tuned_train_time),3)
 
 accuracy_results_train <- c(glm_tuned_result_train[1,]$value, 
-                            # tree_tuned_result_train[1,]$value, 
-                            rf_tuned_result_train[1,]$value)
+                            rf_tuned_result_train[1,]$value,
+                            gbm_metrics_final_train[1,]$value,
+                            dl_metrics_final_train[1,]$value)
+
 recall_results_train <- c(glm_tuned_result_train[2,]$value, 
-                          # tree_tuned_result_train[2,]$value, 
-                          rf_tuned_result_train[2,]$value)
+                          rf_tuned_result_train[2,]$value,
+                          gbm_metrics_final_train[2,]$value,
+                          dl_metrics_final_train[2,]$value)
+
 precision_results_train <- c(glm_tuned_result_train[3,]$value, 
-                             # tree_tuned_result_train[3,]$value, 
-                             rf_tuned_result_train[3,]$value)
+                             rf_tuned_result_train[3,]$value,
+                             gbm_metrics_final_train[3,]$value,
+                             dl_metrics_final_train[3,]$value)
+
 missclassification_results_train<- c(glm_tuned_result_train[4,]$value, 
-                                     # tree_tuned_result_train[4,]$value, 
-                                     rf_tuned_result_train[4,]$value)
+                                     rf_tuned_result_train[4,]$value,
+                                     gbm_metrics_final_train[4,]$value,
+                                     dl_metrics_final_train[4,]$value)
+
 specificity_results_train <- c(glm_tuned_result_train[5,]$value, 
-                               # tree_tuned_result_train[5,]$value, 
-                               rf_tuned_result_train[5,]$value)
+                               rf_tuned_result_train[5,]$value,
+                               gbm_metrics_final_train[5,]$value,
+                               dl_metrics_final_train[5,]$value)
+
 f1_results_train <- c(glm_tuned_result_train[6,]$value, 
-                      # tree_tuned_result_train[6,]$value, 
-                      rf_tuned_result_train[6,]$value)
+                      rf_tuned_result_train[6,]$value,
+                      gbm_metrics_final_train[6,]$value,
+                      dl_metrics_final_train[6,]$value)
+
 roc_auc_results_train <- c(glm_tuned_result_train[7,]$value, 
-                           # tree_tuned_result_train[7,]$value, 
-                           rf_tuned_result_train[7,]$value)
+                           rf_tuned_result_train[7,]$value,
+                           gbm_metrics_final_train[7,]$value,
+                           dl_metrics_final_train[7,]$value)
+
 pr_auc_results_train <- c(glm_tuned_result_train[8,]$value, 
-                          # tree_tuned_result_train[8,]$value, 
-                          rf_tuned_result_train[8,]$value)
+                          rf_tuned_result_train[8,]$value,
+                          gbm_metrics_final_train[8,]$value,
+                          dl_metrics_final_train[8,]$value)
 
 classification_results_train <- data.frame(model_type, 
                                            train_time, 
@@ -780,107 +796,64 @@ Summary of model metrics on the test set
 
 ```{r, class_results_spark_test, echo=FALSE}
 accuracy_results_test <- c(glm_tuned_result[1,]$value, 
-                           # tree_tuned_result[1,]$value, 
-                           rf_tuned_result[1,]$value)
+                           rf_tuned_result[1,]$value,
+                           gbm_metrics_final_test[1,]$value,
+                           dl_metrics_final_test[1,]$value)
+
 recall_results_test <- c(glm_tuned_result[2,]$value, 
-                         # tree_tuned_result[2,]$value, 
-                         rf_tuned_result[2,]$value)
+                         rf_tuned_result[2,]$value,
+                         gbm_metrics_final_test[2,]$value,
+                         dl_metrics_final_test[2,]$value)
+
 precision_results_test <- c(glm_tuned_result[3,]$value, 
-                            # tree_tuned_result[3,]$value, 
-                            rf_tuned_result[3,]$value)
+                            rf_tuned_result[3,]$value,
+                            gbm_metrics_final_test[3,]$value,
+                            dl_metrics_final_test[3,]$value)
+
 missclassification_results_test <- c(glm_tuned_result[4,]$value, 
-                                     # tree_tuned_result[4,]$value, 
-                                     rf_tuned_result[4,]$value)
+                                     rf_tuned_result[4,]$value,
+                                     gbm_metrics_final_test[4,]$value,
+                                     dl_metrics_final_test[4,]$value)
+
 specificity_results_test <- c(glm_tuned_result[5,]$value, 
-                              # tree_tuned_result[5,]$value, 
-                              rf_tuned_result[5,]$value)
+                              rf_tuned_result[5,]$value,
+                              gbm_metrics_final_test[5,]$value,
+                              dl_metrics_final_test[5,]$value)
+
 f1_results_test <- c(glm_tuned_result[6,]$value, 
-                     # tree_tuned_result[6,]$value, 
-                     rf_tuned_result[6,]$value)
+                     rf_tuned_result[6,]$value,
+                     gbm_metrics_final_test[6,]$value,
+                     dl_metrics_final_test[6,]$value)
+
 roc_auc_results_test <- c(glm_tuned_result[7,]$value, 
-                          # tree_tuned_result[7,]$value,
-                          rf_tuned_result[7,]$value)
+                          rf_tuned_result[7,]$value,
+                          gbm_metrics_final_test[7,]$value,
+                          dl_metrics_final_test[7,]$value)
+
 pr_auc_results_test <- c(glm_tuned_result[8,]$value, 
-                         # tree_tuned_result[8,]$value,
-                         rf_tuned_result[8,]$value)
+                         rf_tuned_result[8,]$value,
+                         gbm_metrics_final_test[8,]$value,
+                         dl_metrics_final_test[8,]$value)
 
 classification_results_train <- data.frame(model_type, 
-                                     accuracy_results_test,
-                                     recall_results_test,
-                                     precision_results_test,
-                                     missclassification_results_test,
-                                     specificity_results_test,
-                                     f1_results_test,
-                                     roc_auc_results_test,
-                                     pr_auc_results_test)
+                                           accuracy_results_test,
+                                           recall_results_test,
+                                           precision_results_test,
+                                           missclassification_results_test,
+                                           specificity_results_test,
+                                           f1_results_test,
+                                           roc_auc_results_test,
+                                           pr_auc_results_test)
 colnames(classification_results_train) <- c("model",
-                                      "accuracy", 
-                                      "recall",
-                                      "precision",
-                                      "missclassification",
-                                      "specificity",
-                                      "f1",
-                                      "roc_auc",
-                                      "pr_auc")
+                                            "accuracy", 
+                                            "recall",
+                                            "precision",
+                                            "missclassification",
+                                            "specificity",
+                                            "f1",
+                                            "roc_auc",
+                                            "pr_auc")
 classification_results_train %>% 
-  kbl() %>%
-  kable_minimal()
-```
-
-#### Models build using h2o
-
-```{r, h2o_results1, echo=FALSE, message=FALSE, fig.show='hide', results='hide'}
-gbm_metrics_train <- generate_metrics_classification(model = final_gbm_model,
-                                                    type = "h2o_classification_train")
-colnames(gbm_metrics_train) <- c("metric_names", "GBM_train")
-```
-
-```{r, h2o_results2, echo=FALSE, message=FALSE, fig.show='hide', results='hide'}
-gbm_metrics_test <- generate_metrics_classification(model = gbm,
-                                                    type = "h2o_classification_test",
-                                                    test_data = test_data_h2o,
-                                                    sc = sc)
-```
-
-```{r, h2o_results3, echo=FALSE, message=FALSE, fig.show='hide', results='hide'}
-dl_metrics_train <- generate_metrics_classification(model = final_dl_model,
-                                                    type = "h2o_classification_train")
-colnames(dl_metrics_train) <- c("metric_names", "DL_train")
-```
-
-```{r, h2o_results4, echo=FALSE, message=FALSE, fig.show='hide', results='hide'}
-dl_metrics_test <- generate_metrics_classification(model = best_dl_model,
-                                                    type = "h2o_classification_test",
-                                                    test_data = test_data_h2o,
-                                                    sc = sc)
-```
-
-Model metrics on the entire train set for the models trained using the h2o framework:
-
-```{r, h2o_results5, echo=FALSE}
-final_summary_train <- gbm_metrics_train %>%
-  append(data.frame(dl_metrics_train$DL_train))
-
-final_summary_train <- data.frame(final_summary_train)
-colnames(final_summary_train) <- c("metric_names", "GBM_train", "DL_train")
-
-final_summary_train %>% 
-  kbl() %>%
-  kable_minimal()
-```
-
-Model metrics on the test set for the models trained using the h2o framework:
-
-```{r, h2o_results6, echo=FALSE}
-final_summary_test <- gbm_metrics_test %>%
-  append(data.frame(dl_metrics_test$value))
-
-
-final_summary_test <- data.frame(final_summary_test)
-
-colnames(final_summary_test) <- c("metric_names", "GBM_test", "DL_test")
-
-final_summary_test %>% 
   kbl() %>%
   kable_minimal()
 markdown_end_time <- Sys.time()

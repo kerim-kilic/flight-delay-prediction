@@ -65,24 +65,43 @@ generate_metrics_classification <- function(model,type,test_data, sc)
   }
   if(type == "h2o_classification_train")
   {
-    model_metrics <- model@model$cross_validation_metrics_summary[c(1,2,6,15,16,18,20),]
-    
+    model_metrics1 <- model@model$cross_validation_metrics_summary[c(1,18,16),]
+    model_metrics2 <- model@model$cross_validation_metrics_summary[c(20,6,2,15),]
+    ##
+    value  <- c(1 - final_gbm_model@model$cross_validation_metrics_summary[1,1])
+    metric_names <- c("misclassification")
+    miss_class <- data.frame(metric_names,value)
+    ##
     metric_names <- c("accuracy",
-                      "auc", 
-                      "f1",
-                      "pr_auc",
-                      "precision",
-                      "recall",
-                      "specificity")
+                       "recall", 
+                       "precision")
     metric_names <- data.frame(metric_names)
     
-    model_metrics <- model_metrics %>% append(metric_names)
-    model_metrics <- data.frame(model_metrics)
+    model_metrics1 <- model_metrics1 %>% append(metric_names)
+    model_metrics1 <- data.frame(model_metrics1)
     
-    model_metrics <- model_metrics %>%
+    model_metrics1 <- model_metrics1 %>%
       select(metric_names, mean) %>%
       mutate(mean = round(mean,3))
-    colnames(model_metrics) <- c("metric_names", "value")
+    colnames(model_metrics1) <- c("metric_names", "value")
+    ##
+    metric_names <- c("specificity",
+                      "f1", 
+                      "roc_auc",
+                      "pr_auc")
+    metric_names <- data.frame(metric_names)
+    
+    model_metrics2 <- model_metrics2 %>% append(metric_names)
+    model_metrics2 <- data.frame(model_metrics2)
+    
+    model_metrics2 <- model_metrics2 %>%
+      select(metric_names, mean) %>%
+      mutate(mean = round(mean,3))
+    colnames(model_metrics2) <- c("metric_names", "value")
+    
+    model_metrics <- rbind(model_metrics1,miss_class,model_metrics2) %>%
+      mutate(value = round(value,3))
+    
     return(model_metrics)
   }
   
@@ -114,9 +133,9 @@ generate_metrics_classification <- function(model,type,test_data, sc)
   metric_names <- c("accuracy",
                     "recall",
                     "precision",
-                    "missclassification_rate",
+                    "missclassification",
                     "specificity",
-                    "f_score",
+                    "f1",
                     "roc_auc",
                     "pr_auc")
 
