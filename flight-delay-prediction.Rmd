@@ -85,14 +85,13 @@ main_pipeline <- .%>%
          date = as.Date(date),
          flight_time = planned_arrival_time - planned_departure_time,
          flight_time = minute(flight_time) + (hour(flight_time)*60) + (second(flight_time)/60),
-         speed = flight_distance / flight_time,
-         planned_arrival_local_hour = as.character(planned_arrival_local_hour),
-         planned_departure_local_hour = as.character(planned_departure_local_hour)) %>%
+         speed = flight_distance / flight_time) %>%
   filter(origin %in% airports , destination %in% airports) %>%
   select(date,
          quarter,
          month,
-         day_of_month,day_of_week,
+         day_of_month,
+         day_of_week,
          flight_distance,seating_capacity,
          origin,destination,
          delay,delay_time,flight_time,
@@ -111,7 +110,7 @@ class_delay_pipeline <- .%>% main_pipeline %>%
 
 # Pipeline to add one-hot-encoding:
 # Origin, Destination, Carrier, planned_arrival_hour, planned_departure_hour
-one_hot_features <- c("origin", "destination", "carrier", "planned_arrival_local_hour", "planned_departure_local_hour")
+one_hot_features <- c("origin", "destination", "carrier")
 one_hot_features_ind <- paste0(one_hot_features,"_ind")
 one_hot_features_out <- paste0(one_hot_features,"_out")
 
@@ -119,28 +118,28 @@ one_hot_encoding_pipeline <- . %>%
   ft_string_indexer(input_col = one_hot_features[1], output_col = one_hot_features_ind[1]) %>%
   ft_string_indexer(input_col = one_hot_features[2], output_col = one_hot_features_ind[2]) %>%
   ft_string_indexer(input_col = one_hot_features[3], output_col = one_hot_features_ind[3]) %>%
-  ft_string_indexer(input_col = one_hot_features[4], output_col = one_hot_features_ind[4]) %>%
-  ft_string_indexer(input_col = one_hot_features[5], output_col = one_hot_features_ind[5]) %>%
   ft_one_hot_encoder(input_cols = one_hot_features_ind, output_cols = one_hot_features_out)%>%
-  select(-origin,-destination,-carrier,-planned_arrival_local_hour,-planned_departure_local_hour) %>%
+  select(-origin,-destination,-carrier) %>%
   ft_vector_assembler(input_cols = one_hot_features_out,
                       output_col = "one_hot_output")
 
 adding_extra_features <- . %>%
   ### Join the weather data of the origin airport
   left_join(weather_data,by=c("origin"="origin","date"="date")) %>%
-  ### Join the total departure flights per hour per day per airport
-  left_join(., class_delay_pipeline(raw_data) %>% group_by(origin,date,planned_departure_local_hour) %>% summarise(total_departure_flights=n()),
-            by = c("origin"="origin", "date"="date", "planned_departure_local_hour"="planned_departure_local_hour")) %>%
-  ### Join the total arrival flights per hour per day per airport
-  left_join(., class_delay_pipeline(raw_data) %>% group_by(destination,date,planned_arrival_local_hour) %>% summarise(total_arrival_flights=n()),
-            by = c("destination"="destination", "date"="date", "planned_arrival_local_hour"="planned_arrival_local_hour")) %>%
-  ### Join the total departing passengers per hour per day per airport
-  left_join(., class_delay_pipeline(raw_data) %>% group_by(origin,date,planned_departure_local_hour) %>% summarise(total_departing_passengers=sum(seating_capacity)),
-            by = c("origin"="origin", "date"="date", "planned_departure_local_hour"="planned_departure_local_hour")) %>%
-  ### Join the total arriving passengers per hour per day per airport
-  left_join(., class_delay_pipeline(raw_data) %>% group_by(destination,date,planned_arrival_local_hour) %>% summarise(total_arriving_passengers=sum(seating_capacity)),
-            by = c("destination"="destination", "date"="date", "planned_arrival_local_hour"="planned_arrival_local_hour")) %>%
+  ### Join the total departure flights per day per airport
+  left_join(., class_delay_pipeline(raw_data) %>% group_by(origin,date) %>% summarise(total_departure_flights=n()),
+            by = c("origin"="origin", "date"="date")) %>%
+  ### Join the total arrival flights per day per airport
+  left_join(., class_delay_pipeline(raw_data) %>% group_by(destination,date) %>% summarise(total_arrival_flights=n()),
+            by = c("destination"="destination", "date"="date")) %>%
+  left_join(., class_delay_pipeline(raw_data) %>% group_by(origin,carrier,date) %>% summarise(departing_carrier_flights = n()),
+            by = c("origin"="origin", "carrier"="carrier", "date"="date")) %>%
+  # ### Join the total departing passengers per hour per day per airport
+  # left_join(., class_delay_pipeline(raw_data) %>% group_by(origin,date,planned_departure_local_hour) %>% summarise(total_departing_passengers=sum(seating_capacity)),
+  #           by = c("origin"="origin", "date"="date", "planned_departure_local_hour"="planned_departure_local_hour")) %>%
+  # ### Join the total arriving passengers per hour per day per airport
+  # left_join(., class_delay_pipeline(raw_data) %>% group_by(destination,date,planned_arrival_local_hour) %>% summarise(total_arriving_passengers=sum(seating_capacity)),
+  #           by = c("destination"="destination", "date"="date", "planned_arrival_local_hour"="planned_arrival_local_hour")) %>%
   ### Join the weather data of the destination airport
   left_join(., weather_data2,by=c("destination"="destination","date"="date")) %>%
   select(-date)
