@@ -77,7 +77,7 @@ sdf_nrow(raw_data)
 ```{r, pipeline}
 main_pipeline <- .%>%
   na.omit() %>%
-  mutate(delay_time = actual_departure_time - planned_departure_time,
+  mutate(delay_time = actual_arrival_time - planned_arrival_time,
          delay_time = minute(delay_time) + (hour(delay_time)*60) + (second(delay_time)/60),
          delay = case_when(delay_time >= 15 ~ "1",
                            delay_time < 15 ~ "0"),

@@ -68,7 +68,7 @@ generate_metrics_classification <- function(model,type,test_data, sc)
     model_metrics1 <- model@model$cross_validation_metrics_summary[c(1,18,16),]
     model_metrics2 <- model@model$cross_validation_metrics_summary[c(20,6,2,15),]
     ##
-    value  <- c(1 - final_gbm_model@model$cross_validation_metrics_summary[1,1])
+    value  <- c(1 - model@model$cross_validation_metrics_summary[1,1])
     metric_names <- c("misclassification")
     miss_class <- data.frame(metric_names,value)
     ##
