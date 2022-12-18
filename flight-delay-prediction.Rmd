@@ -95,7 +95,7 @@ main_pipeline <- .%>%
          flight_distance,seating_capacity,
          origin,destination,
          delay,delay_time,flight_time,
-         carrier,speed,
+         speed,
          planned_arrival_local_hour,
          planned_departure_local_hour)
 
@@ -109,17 +109,17 @@ class_delay_pipeline <- .%>% main_pipeline %>%
   group_by(delay)
 
 # Pipeline to add one-hot-encoding:
-# Origin, Destination, Carrier, planned_arrival_hour, planned_departure_hour
-one_hot_features <- c("origin", "destination", "carrier")
+one_hot_features <- c("origin",
+                      "destination")
 one_hot_features_ind <- paste0(one_hot_features,"_ind")
 one_hot_features_out <- paste0(one_hot_features,"_out")
 
 one_hot_encoding_pipeline <- . %>% 
   ft_string_indexer(input_col = one_hot_features[1], output_col = one_hot_features_ind[1]) %>%
   ft_string_indexer(input_col = one_hot_features[2], output_col = one_hot_features_ind[2]) %>%
-  ft_string_indexer(input_col = one_hot_features[3], output_col = one_hot_features_ind[3]) %>%
   ft_one_hot_encoder(input_cols = one_hot_features_ind, output_cols = one_hot_features_out)%>%
-  select(-origin,-destination,-carrier) %>%
+  select(-origin,
+         -destination) %>%
   ft_vector_assembler(input_cols = one_hot_features_out,
                       output_col = "one_hot_output")
 
@@ -132,14 +132,6 @@ adding_extra_features <- . %>%
   ### Join the total arrival flights per day per airport
   left_join(., class_delay_pipeline(raw_data) %>% group_by(destination,date) %>% summarise(total_arrival_flights=n()),
             by = c("destination"="destination", "date"="date")) %>%
-  left_join(., class_delay_pipeline(raw_data) %>% group_by(origin,carrier,date) %>% summarise(departing_carrier_flights = n()),
-            by = c("origin"="origin", "carrier"="carrier", "date"="date")) %>%
-  # ### Join the total departing passengers per hour per day per airport
-  # left_join(., class_delay_pipeline(raw_data) %>% group_by(origin,date,planned_departure_local_hour) %>% summarise(total_departing_passengers=sum(seating_capacity)),
-  #           by = c("origin"="origin", "date"="date", "planned_departure_local_hour"="planned_departure_local_hour")) %>%
-  # ### Join the total arriving passengers per hour per day per airport
-  # left_join(., class_delay_pipeline(raw_data) %>% group_by(destination,date,planned_arrival_local_hour) %>% summarise(total_arriving_passengers=sum(seating_capacity)),
-  #           by = c("destination"="destination", "date"="date", "planned_arrival_local_hour"="planned_arrival_local_hour")) %>%
   ### Join the weather data of the destination airport
   left_join(., weather_data2,by=c("destination"="destination","date"="date")) %>%
   select(-date)
@@ -200,12 +192,12 @@ Take a sample set of the data to reduce time to train the model.
 
 ```{r, spark_data_split, message=FALSE}
 # Split for classification
-data_size <- 50000
+data_size <- 220000
 ##########################################################################################################################
 #### Create the train, validation, test split for classification
 classification_split <- create_train_test_split(data = spark_class_pipeline(raw_data),
                                                 sample_size = data_size,
-                                                ratio = 0.8,
+                                                ratio = 0.9,
                                                 type = "classification")
 train_data <- classification_split$train_data
 test_data <- classification_split$test_data
@@ -222,11 +214,11 @@ train_data %>% glimpse()
 Create the train, validation, test, split to use with the h2o framework.
 
 ```{r, h2o_data_split, message=FALSE}
-data_size <- 50000
+data_size <- 220000
 ### Create the train, validation, test split for classification
 h2o_classification_split <- create_train_test_split(data = h2o_class_pipeline(raw_data),
                                                     sample_size = data_size,
-                                                    ratio = 0.6,
+                                                    ratio = 0.8,
                                                     type = "h2o_classification",
                                                     hc = hc)
 
