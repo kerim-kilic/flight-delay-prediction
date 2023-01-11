@@ -17,6 +17,29 @@ library(worldmet)
 library(janitor)
 ```
 
+During development of the code **Spark version 3.3.0** was used, with the latest version of h2o and sparkling water.
+
+## Data used
+
+The data in **data/flights_2017.RDS** contains data of approximately 5.5 million domestic flights of the US. The predictive models are trained to make predictions for the top 10 airports in the US with the most flights in 2017. The airports are given in the table below:
+
+| Symbol                               | Airport                                            | State                            |
+| ------------------------------------ | -------------------------------------------------- | -------------------------------- |
+| ATL                                  | Hartsfield-Jackson Atlanta International Airport   | Georgia                          |
+| DEN                                  | Denver International Airport                       | Colorado                         |
+| DFW                                  | Dallas/Fort Worth International Airport            | Texas                            |
+| LAS                                  | Harry Reid International Airport                   | Nevada                           |
+| LAX                                  | Los Angeles International Airport                  | California                       |
+| MSP                                  | Minneapolis-Saint Paul International Airport       | Minnesota                        |
+| ORD                                  | Chicago O’Hare International Airport               | Illinois                         |
+| PHX                                  | Phoenix Sky Harbor International Airport           | Arizona                          |
+| SEA                                  | Seattle-Tacoma International Airport               | Washington                       |
+| SFO                                  | San Francisco International Airport                | California                       |
+
+The folder **data/** contains the weather data for each day for each airport, the files are all indexed using the ZIP code and the airport symbol.
+
+The remaining files in **data/** contain
+
 ## Models
 
 The following models are trained and evaluated in this repository:
