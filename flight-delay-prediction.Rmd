@@ -26,6 +26,7 @@ source("src/functions.R")
 library(h2o)
 library(rsparkling)
 library(worldmet)
+library(janitor)
 ```
 
 # Initialize spark, h2o and read in the raw data
@@ -40,6 +41,7 @@ if(!spark_install_find("3.3.0")$installed)
 }
 ### Initialize spark
 spark_config <- spark_config()
+# Change memory based on your machine: i.e. 12 GB available RAM -> "12G" etc.
 spark_config$'sparklyr.shell.driver-memory' <- "12G"
 
 sc <- spark_connect(master = "local",
@@ -62,7 +64,7 @@ if(!file.exists("data/flights_2017.csv"))
   fwrite(my_data,file = "data/flights_2017.csv")  
 }
 
-raw_data <- spark_read_csv(sc,"data/flights_2017.csv")
+raw_data <- spark_read_csv(sc,"flights_data","data/flights_2017.csv",memory=FALSE)
 raw_data %>% glimpse()
 ```
 
@@ -76,7 +78,6 @@ sdf_nrow(raw_data)
 
 ```{r, pipeline}
 main_pipeline <- .%>%
-  na.omit() %>%
   mutate(delay_time = actual_arrival_time - planned_arrival_time,
          delay_time = minute(delay_time) + (hour(delay_time)*60) + (second(delay_time)/60),
          delay = case_when(delay_time >= 15 ~ "1",
@@ -92,9 +93,14 @@ main_pipeline <- .%>%
          month,
          day_of_month,
          day_of_week,
-         flight_distance,seating_capacity,
-         origin,destination,
-         delay,delay_time,flight_time,
+         flight_distance,
+         seating_capacity,
+         origin,
+         destination,
+         carrier,
+         delay,
+         delay_time,
+         flight_time,
          speed,
          planned_arrival_local_hour,
          planned_departure_local_hour)
@@ -110,31 +116,35 @@ class_delay_pipeline <- .%>% main_pipeline %>%
 
 # Pipeline to add one-hot-encoding:
 one_hot_features <- c("origin",
-                      "destination")
+                      "destination",
+                      "carrier")
 one_hot_features_ind <- paste0(one_hot_features,"_ind")
 one_hot_features_out <- paste0(one_hot_features,"_out")
-
 one_hot_encoding_pipeline <- . %>% 
   ft_string_indexer(input_col = one_hot_features[1], output_col = one_hot_features_ind[1]) %>%
   ft_string_indexer(input_col = one_hot_features[2], output_col = one_hot_features_ind[2]) %>%
+  ft_string_indexer(input_col = one_hot_features[3], output_col = one_hot_features_ind[3]) %>%
   ft_one_hot_encoder(input_cols = one_hot_features_ind, output_cols = one_hot_features_out)%>%
-  select(-origin,
-         -destination) %>%
+  select(-origin,-destination, -carrier) %>%
   ft_vector_assembler(input_cols = one_hot_features_out,
                       output_col = "one_hot_output")
 
 adding_extra_features <- . %>%
-  ### Join the weather data of the origin airport
+#   ### Join the weather data of the origin airport
   left_join(weather_data,by=c("origin"="origin","date"="date")) %>%
-  ### Join the total departure flights per day per airport
-  left_join(., class_delay_pipeline(raw_data) %>% group_by(origin,date) %>% summarise(total_departure_flights=n()),
-            by = c("origin"="origin", "date"="date")) %>%
-  ### Join the total arrival flights per day per airport
-  left_join(., class_delay_pipeline(raw_data) %>% group_by(destination,date) %>% summarise(total_arrival_flights=n()),
-            by = c("destination"="destination", "date"="date")) %>%
-  ### Join the weather data of the destination airport
+  left_join(., a_b_joined1,
+            by = c("destination"="destination", "date"="date", "planned_arrival_local_hour"="planned_arrival_local_hour")) %>%
+  left_join(., a_b_joined2,
+            by = c("origin"="origin", "date"="date","planned_departure_local_hour"="planned_departure_local_hour")) %>%
+  mutate(total_flights_destination = case_when(is.na(total_flights_destination) ~ 0,
+                                     !is.na(total_flights_destination) ~ total_flights_destination),
+         total_flights_origin = case_when(is.na(total_flights_origin) ~ 0,
+                                     !is.na(total_flights_origin) ~ total_flights_origin)) %>%
+  left_join(., class_delay_pipeline(raw_data) %>% group_by(origin,carrier,date) %>% summarise(departing_carrier_flights = n()),
+            by = c("origin"="origin", "carrier"="carrier", "date"="date")) %>%
   left_join(., weather_data2,by=c("destination"="destination","date"="date")) %>%
   select(-date)
+  na.omit()
 
 # Final classification pipeline for Spark and h2o models
 spark_class_pipeline <- . %>% class_delay_pipeline %>% adding_extra_features %>% one_hot_encoding_pipeline
@@ -168,8 +178,8 @@ if(!file.exists("data/origin_weather_data.csv") | !file.exists("data/destination
 {
   get_weather_data(sc)
 }
-weather_data <- spark_read_csv(sc,"data/origin_weather_data.csv")
-weather_data2 <- spark_read_csv(sc,"data/destination_weather_data.csv")
+weather_data <- spark_read_csv(sc,"origin_weather_data","data/origin_weather_data.csv",memory=FALSE)
+weather_data2 <- spark_read_csv(sc,"destination_weather_data","data/destination_weather_data.csv",memory=FALSE)
 ```
 
 Glimpse into the weather data of the origin airports.
@@ -184,21 +194,31 @@ Glimpse into the weather data of the destination airports.
 weather_data2 %>% glimpse()
 ```
 
+```{r}
+### Adding the airport congestion
+a1 <- main_pipeline(raw_data) %>% group_by(destination,date,planned_arrival_local_hour) %>% summarise(total_arrival_flights1=n())
+a2 <- main_pipeline(raw_data) %>% group_by(origin,date,planned_departure_local_hour) %>% summarise(total_departing_flights1=n())
+a_b_joined1 <- left_join(a1,a2,by = c("destination"="origin","date"="date","planned_arrival_local_hour"="planned_departure_local_hour")) %>%
+  mutate(total_flights_destination = total_arrival_flights1 + total_departing_flights1) %>%
+  select(destination,date,total_flights_destination,planned_arrival_local_hour)
+a_b_joined2 <- left_join(a2,a1,by = c("origin"="destination","date"="date","planned_departure_local_hour"="planned_arrival_local_hour")) %>%
+  mutate(total_flights_origin = total_arrival_flights1 + total_departing_flights1) %>%
+  select(origin,date,total_flights_origin,planned_departure_local_hour)
+###
+```
+
 # Splitting data in train and test sets
 
 ## Creating the train and test sets for spark
 
-Take a sample set of the data to reduce time to train the model.
+Perform train test split for spark.
 
 ```{r, spark_data_split, message=FALSE}
-# Split for classification
-data_size <- 220000
-##########################################################################################################################
-#### Create the train, validation, test split for classification
-classification_split <- create_train_test_split(data = spark_class_pipeline(raw_data),
-                                                sample_size = data_size,
-                                                ratio = 0.9,
-                                                type = "classification")
+classification_split <- create_train_test_split_(data = spark_class_pipeline(raw_data),
+                                                 ratio = 0.9,
+                                                 type = "spark",
+                                                 hc = hc)
+
 train_data <- classification_split$train_data
 test_data <- classification_split$test_data
 ```
@@ -214,20 +234,36 @@ train_data %>% glimpse()
 Create the train, validation, test, split to use with the h2o framework.
 
 ```{r, h2o_data_split, message=FALSE}
-data_size <- 220000
-### Create the train, validation, test split for classification
 h2o_classification_split <- create_train_test_split(data = h2o_class_pipeline(raw_data),
-                                                    sample_size = data_size,
                                                     ratio = 0.8,
-                                                    type = "h2o_classification",
+                                                    type = "h2o",
                                                     hc = hc)
 
-train_data_h2o <- h2o_classification_split[[1]]
-valid_data_h2o <- h2o_classification_split[[2]]
-test_data_h2o  <- h2o_classification_split[[3]]
+train_data_h2o <- hc$asH2OFrame(h2o_classification_split$train_data)
+valid_data_h2o <- hc$asH2OFrame(h2o_classification_split$valid_data)
+test_data_h2o <- hc$asH2OFrame(h2o_classification_split$test_data)
+```
 
-y <- "delay"
-x <- setdiff(names(train_data_h2o), y)
+
+```{r, clear_data, message=FALSE}
+rm(raw_data)
+rm(classification_split)
+rm(h2o_classification_split)
+rm(weather_data)
+rm(weather_data2)
+rm(a_b_joined1,a_b_joined2)
+rm(a1,a2)
+gc()
+gc()
+h2o:::.h2o.garbageCollect()
+h2o:::.h2o.garbageCollect()
+h2o:::.h2o.garbageCollect()
+sc %>% spark_session %>% invoke("catalog") %>%
+  invoke("dropTempView","flights_data")
+sc %>% spark_session %>% invoke("catalog") %>%
+  invoke("dropTempView","origin_weather_data")
+sc %>% spark_session %>% invoke("catalog") %>%
+  invoke("dropTempView","destination_weather_data")
 ```
 
 # Classification of flight delays
@@ -293,6 +329,73 @@ glm_tuned_result_train %>%
   kable_minimal()
 ```
 
+```{r}
+thresholds <- seq(to=0,from=1,by=-0.01)
+predictions <- ml_predict(glm_model,test_data) %>% select(probability_1,probability_0,delay)
+predictions$model <- "GLM"
+TPR_value <- list()
+FPR_value <- list()
+for (item in thresholds) {
+  threshold_100 <- predictions %>%
+    mutate(prediction = case_when(probability_1 >= item ~ "1",
+                                  probability_1 < item ~ "0"))
+
+  TP <- sdf_nrow(threshold_100 %>% filter(prediction == "1", delay == "1"))
+  TN <- sdf_nrow(threshold_100 %>% filter(prediction == "0", delay == "0"))
+  FN <- sdf_nrow(threshold_100 %>% filter(prediction == "0", delay == "1"))
+  FP <- sdf_nrow(threshold_100 %>% filter(prediction == "1", delay == "0"))
+  TPR <- TP/(TP + FN)
+  FPR <- FP/(TN + FP)
+  TPR_value <- append(TPR_value,TPR)
+  FPR_value <- append(FPR_value,FPR)
+}
+
+glm_roc <- do.call(rbind, Map(data.frame, TPR_value=TPR_value, FPR_value=FPR_value))
+glm_roc$model <- "GLM"
+
+ggplot(glm_roc, aes(x = FPR_value, y = TPR_value)) +
+  geom_line(colour = "#0000ff",linetype = "longdash", linewidth=1) + geom_abline(lty="dashed")+
+  scale_x_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0,1)) +
+  scale_y_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0, 1)) +
+  labs(title = "Receiver Operating Characteristic curve") +
+  xlab("False Positive Rate (FPR)") +
+  ylab("True Positive Rate (TPR)") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5,face="bold"))
+```
+
+```{r}
+precision_value <- list()
+recall_value <- list()
+for (item in thresholds) {
+  threshold_100 <- predictions %>%
+    mutate(prediction = case_when(probability_1 >= item ~ "1",
+                                  probability_1 < item ~ "0"))
+
+  TP <- sdf_nrow(threshold_100 %>% filter(prediction == "1", delay == "1"))
+  TN <- sdf_nrow(threshold_100 %>% filter(prediction == "0", delay == "0"))
+  FN <- sdf_nrow(threshold_100 %>% filter(prediction == "0", delay == "1"))
+  FP <- sdf_nrow(threshold_100 %>% filter(prediction == "1", delay == "0"))
+  precision_tmp <- TP/(TP + FP)
+  recall_tmp <- TP/(TP + FN)
+  precision_value <- append(precision_value,precision_tmp)
+  recall_value <- append(recall_value,recall_tmp)
+}
+
+glm_pr <- do.call(rbind, Map(data.frame, precision_value=precision_value, recall_value=recall_value))
+glm_pr$model <- "GLM"
+
+ggplot(glm_pr, aes(x = recall_value, y = precision_value)) +
+  geom_line(colour = "#0000ff",linetype = "longdash", linewidth=1) +
+  scale_x_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0,1)) +
+  scale_y_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0, 1)) +
+  labs(title = "Precision Recall curve") +
+  xlab("Recall ((TP)/(TP+FP))") +
+  ylab("Precision (TPR)") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5,face="bold"))
+```
+
 Save the model to be able to reuse it later on predictions.
 
 ```{r, glm_save_model, message=FALSE}
@@ -310,6 +413,15 @@ glm_tuned_result <- generate_metrics_classification(glm_model,
 glm_tuned_result %>% 
   kbl() %>%
   kable_minimal()
+```
+
+```{r}
+glm_confusion_matrix <- confusion_matrix_elements(glm_model,test_data,"spark")
+
+glm_confusion_matrix$TP
+glm_confusion_matrix$TN
+glm_confusion_matrix$FP
+glm_confusion_matrix$FN
 ```
 
 ## Random forest model
@@ -369,6 +481,73 @@ rf_tuned_result_train %>%
   kable_minimal()
 ```
 
+```{r}
+thresholds <- seq(to=0,from=1,by=-0.01)
+predictions <- ml_predict(rf_model,test_data) %>% select(probability_1,probability_0,delay)
+predictions$model <- "RF"
+TPR_value <- list()
+FPR_value <- list()
+for (item in thresholds) {
+  threshold_100 <- predictions %>%
+    mutate(prediction = case_when(probability_1 >= item ~ "1",
+                                  probability_1 < item ~ "0"))
+
+  TP <- sdf_nrow(threshold_100 %>% filter(prediction == "1", delay == "1"))
+  TN <- sdf_nrow(threshold_100 %>% filter(prediction == "0", delay == "0"))
+  FN <- sdf_nrow(threshold_100 %>% filter(prediction == "0", delay == "1"))
+  FP <- sdf_nrow(threshold_100 %>% filter(prediction == "1", delay == "0"))
+  TPR <- TP/(TP + FN)
+  FPR <- FP/(TN + FP)
+  TPR_value <- append(TPR_value,TPR)
+  FPR_value <- append(FPR_value,FPR)
+}
+
+rf_roc <- do.call(rbind, Map(data.frame, TPR_value=TPR_value, FPR_value=FPR_value))
+rf_roc$model <- "RF"
+
+ggplot(rf_roc, aes(x = FPR_value, y = TPR_value)) +
+  geom_line(colour = "#0000ff",linetype = "longdash", linewidth=1) + geom_abline(lty="dashed")+
+  scale_x_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0,1)) +
+  scale_y_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0, 1)) +
+  labs(title = "Receiver Operating Characteristic curve") +
+  xlab("False Positive Rate (FPR)") +
+  ylab("True Positive Rate (TPR)") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5,face="bold"))
+```
+
+```{r}
+precision_value <- list()
+recall_value <- list()
+for (item in thresholds) {
+  threshold_100 <- predictions %>%
+    mutate(prediction = case_when(probability_1 >= item ~ "1",
+                                  probability_1 < item ~ "0"))
+
+  TP <- sdf_nrow(threshold_100 %>% filter(prediction == "1", delay == "1"))
+  TN <- sdf_nrow(threshold_100 %>% filter(prediction == "0", delay == "0"))
+  FN <- sdf_nrow(threshold_100 %>% filter(prediction == "0", delay == "1"))
+  FP <- sdf_nrow(threshold_100 %>% filter(prediction == "1", delay == "0"))
+  precision_tmp <- TP/(TP + FP)
+  recall_tmp <- TP/(TP + FN)
+  precision_value <- append(precision_value,precision_tmp)
+  recall_value <- append(recall_value,recall_tmp)
+}
+
+rf_pr <- do.call(rbind, Map(data.frame, precision_value=precision_value, recall_value=recall_value))
+rf_pr$model <- "RF"
+
+ggplot(rf_pr, aes(x = recall_value, y = precision_value)) +
+  geom_line(colour = "#0000ff",linetype = "longdash", linewidth=1) +
+  scale_x_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0,1)) +
+  scale_y_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0, 1)) +
+  labs(title = "Precision Recall curve") +
+  xlab("Recall ((TP)/(TP+FP))") +
+  ylab("Precision (TPR)") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5,face="bold"))
+```
+
 Save the model to be able to reuse it later on predictions.
 
 ```{r, rf_model_save, message=FALSE}
@@ -388,12 +567,28 @@ rf_tuned_result %>%
   kable_minimal()
 ```
 
+```{r}
+rf_confusion_matrix <- confusion_matrix_elements(rf_model,test_data,"spark")
+
+rf_confusion_matrix$TP
+rf_confusion_matrix$TN
+rf_confusion_matrix$FP
+rf_confusion_matrix$FN
+```
+
+```{r}
+rm(train_data,
+   test_data)
+gc()
+gc()
+h2o:::.h2o.garbageCollect()
+h2o:::.h2o.garbageCollect()
+h2o:::.h2o.garbageCollect()
+```
+
 ## Training a gradient boosting machine with h2o
 
 In this section we will train a gradient boosted machine model using the h2o framework. 
-
-<!-- Check this link for the tutorial for hyper parameter tuning a GBM model: -->
-<!-- https://h2o.ai/blog/h2o-gbm-tuning-tutorial-for-r/ -->
 
 Define the variables to use in model training, cross validation and hyper parameter tuning.
 
@@ -445,7 +640,8 @@ grid <- h2o.grid(
   stopping_metric = "AUC",
   ## score every 10 trees to make early stopping reproducible (it depends on the scoring interval)
   score_tree_interval = 10,
-  categorical_encoding = "auto"
+  categorical_encoding = "auto",
+  max_runtime_secs = 14400
 )
 ### Get the grid and sort decreasing by AUC 
 sortedGrid <- h2o.getGrid("depth_grid", sort_by="auc", decreasing = TRUE)
@@ -483,7 +679,7 @@ search_criteria = list(
   ## Random grid search
   strategy = "RandomDiscrete",
   ## limit the runtime to 60 minutes
-  max_runtime_secs = 3600,
+  max_runtime_secs = 14400,
   ## build no more than 100 models
   max_models = 100,
   ## random number generator seed to make sampling of parameter combinations reproducible
@@ -517,7 +713,7 @@ grid <- h2o.grid(
   ## (use 1.00 to disable, but then lower the learning_rate)
   learn_rate_annealing = 0.99,
   ## early stopping based on timeout (no model should take more than 1 hour - modify as needed)
-  max_runtime_secs = 3600,
+  max_runtime_secs = 36000,
   ## early stopping once the validation AUC doesn't improve by at least 0.01% for 5 consecutive scoring events
   stopping_rounds = 5, stopping_tolerance = 1e-2, stopping_metric = "AUC",
   ## score every 10 trees to make early stopping reproducible (it depends on the scoring interval)
@@ -529,6 +725,10 @@ grid <- h2o.grid(
 ## Sort the grid models by AUC and select the best performing model
 sortedGrid <- h2o.getGrid("final_grid", sort_by = "auc", decreasing = TRUE)
 gbm <- h2o.getModel(sortedGrid@model_ids[[1]])
+```
+
+```{r}
+sortedGrid
 ```
 
 Show the metrics of the model with the thresholds
@@ -556,11 +756,85 @@ final_gbm_model <- do.call(h2o.gbm,
           p$training_frame = h2o.rbind(train_data_h2o, valid_data_h2o)      ## use the full dataset
           p$validation_frame = NULL  ## no validation frame
           p$nfolds = 4               ## cross-validation
+          p$max_runtime_secs = 36000
           p
         }
 )
 gbm_tuned_end_time <- Sys.time()
 gbm_tuned_train_time <- gbm_tuned_end_time - gbm_tuned_start_time
+```
+
+```{r}
+thresholds <- seq(to=0,from=1,by=-0.01)
+predictions <- as.data.frame(h2o.predict(final_gbm_model,test_data_h2o)) %>% select(p0,p1)
+predictions$delay <- as.vector(test_data_h2o$delay)
+predictions$model <- "GBM"
+predictions <- copy_to(dest = sc,
+                       df = predictions,
+                       overwrite = TRUE)
+
+
+TPR_value <- list()
+FPR_value <- list()
+for (item in thresholds) {
+  threshold_100 <- predictions %>%
+    mutate(prediction = case_when(p1 >= item ~ "1",
+                                  p1 < item ~ "0"))
+
+  TP <- sdf_nrow(threshold_100 %>% filter(prediction == "1", delay == "1"))
+  TN <- sdf_nrow(threshold_100 %>% filter(prediction == "0", delay == "0"))
+  FN <- sdf_nrow(threshold_100 %>% filter(prediction == "0", delay == "1"))
+  FP <- sdf_nrow(threshold_100 %>% filter(prediction == "1", delay == "0"))
+  TPR <- TP/(TP + FN)
+  FPR <- FP/(TN + FP)
+  TPR_value <- append(TPR_value,TPR)
+  FPR_value <- append(FPR_value,FPR)
+}
+
+gbm_roc <- do.call(rbind, Map(data.frame, TPR_value=TPR_value, FPR_value=FPR_value))
+gbm_roc$model <- "GBM"
+
+ggplot(gbm_roc, aes(x = FPR_value, y = TPR_value)) +
+  geom_line(colour = "#0000ff",linetype = "longdash", linewidth=1) + geom_abline(lty="dashed")+
+  scale_x_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0,1)) +
+  scale_y_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0, 1)) +
+  labs(title = "Receiver Operating Characteristic curve") +
+  xlab("False Positive Rate (FPR)") +
+  ylab("True Positive Rate (TPR)") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5,face="bold"))
+```
+
+```{r}
+precision_value <- list()
+recall_value <- list()
+for (item in thresholds) {
+  threshold_100 <- predictions %>%
+    mutate(prediction = case_when(p1 >= item ~ "1",
+                                  p1 < item ~ "0"))
+
+  TP <- sdf_nrow(threshold_100 %>% filter(prediction == "1", delay == "1"))
+  TN <- sdf_nrow(threshold_100 %>% filter(prediction == "0", delay == "0"))
+  FN <- sdf_nrow(threshold_100 %>% filter(prediction == "0", delay == "1"))
+  FP <- sdf_nrow(threshold_100 %>% filter(prediction == "1", delay == "0"))
+  precision_tmp <- TP/(TP + FP)
+  recall_tmp <- TP/(TP + FN)
+  precision_value <- append(precision_value,precision_tmp)
+  recall_value <- append(recall_value,recall_tmp)
+}
+
+gbm_pr <- do.call(rbind, Map(data.frame, precision_value=precision_value, recall_value=recall_value))
+gbm_pr$model <- "GBM"
+
+ggplot(gbm_pr, aes(x = recall_value, y = precision_value)) +
+  geom_line(colour = "#0000ff",linetype = "longdash", linewidth=1) +
+  scale_x_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0,1)) +
+  scale_y_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0, 1)) +
+  labs(title = "Precision Recall curve") +
+  xlab("Recall ((TP)/(TP+FP))") +
+  ylab("Precision (TPR)") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5,face="bold"))
 ```
 
 Model metrics of the final tuned model:
@@ -586,6 +860,15 @@ gbm_metrics_final_test %>%
   kable_minimal()
 ```
 
+```{r}
+gbm_confusion_matrix <- confusion_matrix_elements(final_gbm_model,test_data_h2o,"h2o")
+
+gbm_confusion_matrix$TP
+gbm_confusion_matrix$TN
+gbm_confusion_matrix$FP
+gbm_confusion_matrix$FN
+```
+
 Save the model:
 
 ```{r, gbm_save_model, message=FALSE, fig.show='hide', results='hide'}
@@ -602,10 +885,11 @@ Hyper parameter tuning with grid search
 
 ```{r, dl_tune, message=FALSE, fig.show='hide', results='hide'}
 hyper_params <- list(
-  hidden=list(c(32,32,32),c(64,64)),
-  input_dropout_ratio=c(0,0.05),
-  rate=c(0.01,0.02),
-  rate_annealing=c(1e-8,1e-7,1e-6)
+  hidden=list(c(32,32,32),c(64,64),c(100,100,100)),
+  input_dropout_ratio=c(0,0.05,0.15),
+  rate=c(0.01,0.02,1e-3,1e-4),
+  rate_annealing=c(1e-8,1e-7,1e-6),
+  activation=c("Rectifier with dropout","Tanh with dropout")
 )
 
 grid <- h2o.grid(
@@ -615,7 +899,7 @@ grid <- h2o.grid(
   validation_frame=valid_data_h2o, 
   x=x, 
   y=y,
-  epochs=10,
+  epochs=50,
   ### stop when misclassification does not improve by >=1% for 2 scoring events
   stopping_metric="misclassification",
   stopping_tolerance=1e-2,        
@@ -631,16 +915,19 @@ grid <- h2o.grid(
   momentum_ramp=1e7, 
   l1=1e-5,
   l2=1e-5,
-  activation=c("Rectifier"),
   ### can help improve stability for Rectifier
   max_w2=10,                    
   hyper_params=hyper_params,
-  categorical_encoding = "auto",
-  max_runtime_secs = 3600
+  categorical_encoding = "auto", 
+  max_runtime_secs = 36000
 )
 ## Sort the grid models by AUC
 sortedGrid <- h2o.getGrid("dl_grid", sort_by = "auc", decreasing = TRUE)
 best_dl_model <- h2o.getModel(grid@model_ids[[1]])
+```
+
+```{r}
+sortedGrid
 ```
 
 Show the metrics of the model with the thresholds
@@ -675,6 +962,105 @@ dl_tuned_end_time <- Sys.time()
 dl_tuned_train_time <- dl_tuned_end_time - dl_tuned_start_time
 ```
 
+```{r}
+thresholds <- seq(to=0,from=1,by=-0.01)
+predictions <- as.data.frame(h2o.predict(final_dl_model,test_data_h2o)) %>% select(p0,p1)
+predictions$delay <- as.vector(test_data_h2o$delay)
+predictions$model <- "DL"
+predictions <- copy_to(dest = sc,
+                       df = predictions,
+                       overwrite = TRUE)
+
+
+TPR_value <- list()
+FPR_value <- list()
+for (item in thresholds) {
+  threshold_100 <- predictions %>%
+    mutate(prediction = case_when(p1 >= item ~ "1",
+                                  p1 < item ~ "0"))
+
+  TP <- sdf_nrow(threshold_100 %>% filter(prediction == "1", delay == "1"))
+  TN <- sdf_nrow(threshold_100 %>% filter(prediction == "0", delay == "0"))
+  FN <- sdf_nrow(threshold_100 %>% filter(prediction == "0", delay == "1"))
+  FP <- sdf_nrow(threshold_100 %>% filter(prediction == "1", delay == "0"))
+  TPR <- TP/(TP + FN)
+  FPR <- FP/(TN + FP)
+  TPR_value <- append(TPR_value,TPR)
+  FPR_value <- append(FPR_value,FPR)
+}
+
+dl_roc <- do.call(rbind, Map(data.frame, TPR_value=TPR_value, FPR_value=FPR_value))
+dl_roc$model <- "DL"
+
+ggplot(dl_roc, aes(x = FPR_value, y = TPR_value)) +
+  geom_line(colour = "#0000ff",linetype = "longdash", linewidth=1) + geom_abline(lty="dashed")+
+  scale_x_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0,1)) +
+  scale_y_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0, 1)) +
+  labs(title = "Receiver Operating Characteristic curve") +
+  xlab("False Positive Rate (FPR)") +
+  ylab("True Positive Rate (TPR)") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5,face="bold"))
+```
+
+```{r}
+precision_value <- list()
+recall_value <- list()
+for (item in thresholds) {
+  threshold_100 <- predictions %>%
+    mutate(prediction = case_when(p1 >= item ~ "1",
+                                  p1 < item ~ "0"))
+
+  TP <- sdf_nrow(threshold_100 %>% filter(prediction == "1", delay == "1"))
+  TN <- sdf_nrow(threshold_100 %>% filter(prediction == "0", delay == "0"))
+  FN <- sdf_nrow(threshold_100 %>% filter(prediction == "0", delay == "1"))
+  FP <- sdf_nrow(threshold_100 %>% filter(prediction == "1", delay == "0"))
+  precision_tmp <- TP/(TP + FP)
+  recall_tmp <- TP/(TP + FN)
+  precision_value <- append(precision_value,precision_tmp)
+  recall_value <- append(recall_value,recall_tmp)
+}
+
+dl_pr <- do.call(rbind, Map(data.frame, precision_value=precision_value, recall_value=recall_value))
+dl_pr$model <- "DL"
+
+ggplot(dl_pr, aes(x = recall_value, y = precision_value)) +
+  geom_line(colour = "#0000ff",linetype = "longdash", linewidth=1) +
+  scale_x_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0,1)) +
+  scale_y_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0, 1)) +
+  labs(title = "Precision Recall curve") +
+  xlab("Recall ((TP)/(TP+FP))") +
+  ylab("Precision (TPR)") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5,face="bold"))
+```
+
+```{r}
+roc_combined <- rbind(glm_roc,rf_roc,dl_roc,gbm_roc)
+ggplot(roc_combined, aes(x = FPR_value, y = TPR_value)) +
+  geom_line(aes(color = model, linetype = model), linewidth=1) + geom_abline(lty="dotted") +
+  scale_x_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0,1)) +
+  scale_y_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0, 1)) +
+  labs(title = "Receiver Operating Characteristic curve comparison") +
+  xlab("False Positive Rate (FPR)") +
+  ylab("True Positive Rate (TPR)") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5,face="bold"))
+```
+
+```{r}
+pr_combined <- rbind(glm_pr,rf_pr,dl_pr,gbm_pr)
+ggplot(pr_combined, aes(x = recall_value, y = precision_value)) +
+  geom_line(aes(color = model, linetype = model), linewidth=1) +
+  scale_x_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0,1)) +
+  scale_y_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1),limits = c(0, 1)) +
+  labs(title = "Precision Recall curve comparison") +
+  xlab("Recall ((TP)/(TP+FP))") +
+  ylab("Precision (TPR)") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5,face="bold"))
+```
+
 Model metrics of the final tuned model:
 
 ```{r, dl_metrics_final_train}
@@ -695,6 +1081,15 @@ dl_metrics_final_test <- generate_metrics_classification(model = final_dl_model,
 dl_metrics_final_test %>%
   kbl() %>%
   kable_minimal()
+```
+
+```{r}
+dl_confusion_matrix <- confusion_matrix_elements(final_dl_model,test_data_h2o,"h2o")
+
+dl_confusion_matrix$TP
+dl_confusion_matrix$TN
+dl_confusion_matrix$FP
+dl_confusion_matrix$FN
 ```
 
 Save the model:
